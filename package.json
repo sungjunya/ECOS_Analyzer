@@ -1,25 +1,14 @@
 {
-  "name": "monetary-compass",
+  "name": "backend",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.13.1",
-    "dotenv": "^16.6.1",
-    "express": "^4.21.2"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/sungjunya/ECOS_Analyzer.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/sungjunya/ECOS_Analyzer/issues"
-  },
-  "homepage": "https://github.com/sungjunya/ECOS_Analyzer#readme",
-  "description": ""
+    "axios": "^1.7.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
 }
