@@ -1,45 +1,52 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>Monetary Compass - 투자 시그널</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <style>
-        body { font-family: 'Arial', sans-serif; padding: 20px; background-color: #f4f7f6; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        #signal-box { padding: 20px; margin-bottom: 20px; border-radius: 8px; text-align: center; }
-        #signal-level { font-size: 2.5em; font-weight: bold; margin: 0; }
-        #recommendation { font-size: 1.1em; color: #555; margin-top: 10px; }
-        .date { font-size: 0.9em; color: #777; margin-bottom: 10px; }
-        .rate-summary { display: flex; justify-content: space-around; margin-top: 15px; }
-        .chart-container { width: 100%; height: 400px; margin-top: 30px; }
-        
-        /* 시그널 색상 (CSS) */
-        .signal-red { background-color: #ffe0e0; color: #d32f2f; border: 1px solid #d32f2f; }
-        .signal-orange { background-color: #fff3e0; color: #ff9800; border: 1px solid #ff9800; }
-        .signal-yellow { background-color: #fffde7; color: #fbc02d; border: 1px solid #fbc02d; }
-        .signal-green { background-color: #e8f5e9; color: #4caf50; border: 1px solid #4caf50; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Monetary Compass - 투자 시그널</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: 'Malgun Gothic', Arial, sans-serif; background: #f4f7f6; margin: 0; padding: 20px; }
+    .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    h1 { text-align: center; color: #1a1a1a; margin-bottom: 20px; }
+    #signal-box { padding: 25px; margin-bottom: 25px; border-radius: 10px; text-align: center; transition: all 0.3s; }
+    #signal-level { font-size: 2.3em; font-weight: bold; margin: 0; }
+    #recommendation { font-size: 1.1em; color: #444; margin: 12px 0; }
+    .date { font-size: 0.9em; color: #777; margin-bottom: 8px; }
+    .rate-summary { text-align: center; font-size: 1.2em; margin: 15px 0; }
+    .chart-container { height: 380px; margin-top: 30px; position: relative; }
+    .footer { text-align: center; margin-top: 40px; color: #888; font-size: 0.9em; }
+
+    .signal-red { background: #ffe0e0; color: #d32f2f; border: 1px solid #ffcdd2; }
+    .signal-orange { background: #fff3e0; color: #ef6c00; border: 1px solid #ffcc80; }
+    .signal-yellow { background: #fffde7; color: #f9a825; border: 1px solid #fff59d; }
+    .signal-green { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Monetary Compass - 투자 시그널</h1>
-        
-        <div id="signal-box" class="signal-yellow">
-            <p class="date">기준일: <span id="current-date">로딩 중...</span></p>
-            <p id="signal-level">분석 중...</p>
-            <p id="recommendation">데이터를 불러오고 있습니다.</p>
-        </div>
+  <div class="container">
+    <h1>Monetary Compass - 투자 시그널</h1>
 
-        <div class="rate-summary">
-            <p>최근 금리 스프레드: <strong id="latest-spread">N/A</strong>%</p>
-        </div>
-
-        <div class="chart-container">
-            <h2>장단기 금리 스프레드 (최근 추이)</h2>
-            <canvas id="spreadChart"></canvas>
-        </div>
+    <div id="signal-box" class="signal-yellow">
+      <p class="date">기준일: <span id="current-date">로딩 중...</span></p>
+      <p id="signal-level">분석 중...</p>
+      <p id="recommendation">데이터를 불러오는 중입니다.</p>
     </div>
-    <script src="script.js"></script>
+
+    <div class="rate-summary">
+      최근 금리 스프레드: <strong id="latest-spread">N/A</strong>%
+    </div>
+
+    <div class="chart-container">
+      <h2 style="text-align:center;">장단기 금리 스프레드 (10년 - 3년 국채)</h2>
+      <canvas id="spreadChart"></canvas>
+    </div>
+  </div>
+
+  <div class="footer">
+    데이터 출처: 한국은행 ECOS | 실시간 업데이트
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>

@@ -1,118 +1,144 @@
-// services/dataAnalyzer.js (최종 수정: ERROR-101 해결)
+// 📄 dataAnalyzer.js (ECOS 시장금리 월별 버전)
 const axios = require('axios');
 
-// 현재 날짜를 YYYYMM 형식으로 반환하도록 수정합니다.
-function getFormattedDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    // 🚨 YYYYMM 형식으로 반환
-    return `${year}${month}`; 
+// 오늘 날짜 기준으로 월 단위 종료일 생성
+function getTodayYYYYMM() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-const TODAY = new Date();
+const today = getTodayYYYYMM();
 
 const API_CONFIG = {
-    KEY: process.env.ECOS_API_KEY,
-    BASE_URL: 'http://ecos.bok.or.kr/api/StatisticSearch',
-    
-    // M2 통화량 테스트용 코드
-    STAT_CODE: '901Y003',       // 1.1.2 통화(평잔)
-    ITEM_CODE_3Y: '010000000',  // M2
-    ITEM_CODE_10Y: '010000000', // M2 (로직 유지를 위해)
+  KEY: process.env.ECOS_API_KEY,
+  BASE_URL: 'https://ecos.bok.or.kr/api/StatisticSearch',
 
-    // 기간을 YYYYMM 형식으로 변경
-    START_DATE: '202401', // YYYYMM
-    END_DATE: getFormattedDate(TODAY), // YYYYMM
-    
-    LANG: 'kr',
-    TYPE: 'json',
-    P_START: 1, 
-    P_END: 500, 
+  // 📊 한국은행 ECOS 코드 (시장금리 월별)
+  STAT_CODE: '721Y001',        // 시장금리
+  ITEM_CODE_3Y: '5020000',     // 3년 국채수익률
+  ITEM_CODE_10Y: '5050000',    // 10년 국채수익률
+
+  START_DATE: '202301',        // 2023년 1월부터
+  END_DATE: today,             // 현재 월까지
+  LANG: 'kr',
+  TYPE: 'json',
+  P_START: 1,
+  P_END: 500,
+  CYCLE: 'M'                   // ✅ 월별 데이터
 };
 
 /**
- * ECOS API로부터 특정 데이터를 가져오는 함수 (에러 처리 및 URL 로깅 강화)
+ * 📡 ECOS API에서 특정 항목 데이터 가져오기
  */
-async function fetchInterestRate(itemCode) {
-    const { KEY, BASE_URL, STAT_CODE, START_DATE, END_DATE, LANG, TYPE, P_START, P_END } = API_CONFIG;
-    
-    // 🚨 주기(CYCLE) M 사용
-    const url = `${BASE_URL}/${KEY}/${TYPE}/${LANG}/${P_START}/${P_END}/${STAT_CODE}/M/${START_DATE}/${END_DATE}/${itemCode}`;
-    
-    console.log(`[BOK API REQUEST] Testing URL: ${url}`);
-    
-    try {
-        const response = await axios.get(url);
-        const data = response.data;
+async function fetchRateData(itemCode) {
+  const {
+    KEY, BASE_URL, STAT_CODE, START_DATE, END_DATE, LANG, TYPE, P_START, P_END, CYCLE
+  } = API_CONFIG;
 
-        if (data.RESULT && data.RESULT.CODE) {
-            const errMsg = `[ECOS API] Code: ${data.RESULT.CODE} / Message: ${data.RESULT.MESSAGE}`;
-            throw new Error(errMsg);
-        } 
-        
-        const statisticData = data.StatisticSearch;
-        
-        if (statisticData && statisticData.row) {
-            return statisticData.row.map(item => ({
-                time: item.TIME,
-                value: parseFloat(item.DATA_VALUE)
-            }));
-        } else {
-            throw new Error(`ECOS API 응답 구조 오류 또는 데이터 없음. (요청 URL: ${url})`);
-        }
-    } catch (error) {
-        if (axios.isAxiosError(error)) {
-            throw new Error(`네트워크 오류 발생: ${error.message}`);
-        }
-        throw error; 
+  const url = `${BASE_URL}/${KEY}/${TYPE}/${LANG}/${P_START}/${P_END}/${STAT_CODE}/${CYCLE}/${START_DATE}/${END_DATE}/${itemCode}`;
+  console.log(`[요청] ${itemCode === '5020000' ? '3년' : '10년'} 국채: ${url}`);
+
+  try {
+    const response = await axios.get(url, { timeout: 10000 });
+    const result = response.data?.StatisticSearch;
+
+    if (!result || !Array.isArray(result.row) || result.row.length === 0) {
+      const msg = result?.RESULT?.MESSAGE || result?.result?.MESSAGE || 'API 응답 오류';
+      throw new Error(`데이터 없음: ${msg}`);
     }
+
+    return result.row
+      .map(item => ({
+        time: item.TIME,                   // YYYYMM
+        value: parseFloat(item.DATA_VALUE)
+      }))
+      .filter(d => !isNaN(d.value));
+
+  } catch (error) {
+    if (error.response?.data?.RESULT) {
+      const err = error.response.data.RESULT;
+      throw new Error(`${err.CODE}: ${err.MESSAGE}`);
+    }
+    throw new Error(`API 요청 실패: ${error.message}`);
+  }
 }
 
 /**
- * 장단기 금리 스프레드 계산 및 투자 시그널 생성 (M2 테스트 목적)
+ * 📈 장단기 금리 스프레드 계산 및 투자 시그널 생성
  */
 async function getInvestmentSignal() {
-    // M2 데이터 수집
-    const dataM2_1 = await fetchInterestRate(API_CONFIG.ITEM_CODE_3Y);
-    const dataM2_2 = await fetchInterestRate(API_CONFIG.ITEM_CODE_10Y);
+  try {
+    const [data3Y, data10Y] = await Promise.all([
+      fetchRateData(API_CONFIG.ITEM_CODE_3Y),
+      fetchRateData(API_CONFIG.ITEM_CODE_10Y)
+    ]);
 
-    const latest3Y = dataM2_1[dataM2_1.length - 1];
-    const latest10Y = dataM2_2.find(d => d.time === latest3Y.time); 
+    // 날짜 기준으로 매칭
+    const spreadData = [];
+    const map3Y = new Map(data3Y.map(d => [d.time, d.value]));
 
-    if (!latest3Y || !latest10Y) {
-        throw new Error("최신 M2 통화량 데이터를 찾을 수 없습니다. API 설정 및 기간을 확인하세요.");
-    }
-    
-    const spread = latest10Y.value - latest3Y.value; 
-    const today = latest3Y.time; 
-
-    // 규칙 기반 의사결정 로직 (M2 테스트용 시그널)
-    let signalLevel = 'M2 테스트 성공';
-    let recommendation = '✅ M2 통화량 데이터를 성공적으로 가져왔습니다. API 키는 유효합니다. 이제 금리 코드로 돌아가야 합니다.';
-    let signalColor = 'green'; 
-    
-    if (spread !== 0) { 
-        signalLevel = 'M2 데이터 오류';
-        recommendation = 'M2 데이터에 불일치가 감지되었습니다.';
-        signalColor = 'red';
+    for (const d of data10Y) {
+      const val3Y = map3Y.get(d.time);
+      if (val3Y !== undefined) {
+        const spread = d.value - val3Y;
+        spreadData.push({
+          time: d.time,
+          spread: spread.toFixed(2)
+        });
+      }
     }
 
-    // 시각화 데이터 준비 
-    const chartData = dataM2_1.map((d) => {
-        return {
-            time: d.time,
-            spread: d.value.toFixed(2) // M2 값을 스프레드 자리에 임시로 넣음
-        };
-    }).filter(d => d.spread !== 'N/A');
-    
+    if (spreadData.length === 0) {
+      throw new Error("3년/10년 데이터 매칭 실패");
+    }
+
+    const latest = spreadData[spreadData.length - 1];
+    const spread = parseFloat(latest.spread);
+
+    // 📊 시그널 로직
+    let signalLevel, recommendation, signalColor;
+
+    if (spread > 1.0) {
+      signalLevel = '매우 강한 상승장';
+      recommendation = '주식 매수 유리 (수익률 곡선 정상화)';
+      signalColor = 'green';
+    } else if (spread > 0.5) {
+      signalLevel = '상승장 신호';
+      recommendation = '점진적 매수 고려';
+      signalColor = 'yellow';
+    } else if (spread > 0) {
+      signalLevel = '약한 상승';
+      recommendation = '관망 또는 단기 채권';
+      signalColor = 'orange';
+    } else {
+      signalLevel = '하락장 경고';
+      recommendation = '방어적 포트폴리오 권장';
+      signalColor = 'red';
+    }
+
+    // 최근 24개월만 표시
+    const recentData = spreadData.slice(-24);
+
     return {
-        date: today,
-        latestSpread: latest3Y.value.toFixed(2), 
-        signalLevel,
-        recommendation,
-        signalColor,
-        chartData
+      date: latest.time,
+      latestSpread: latest.spread,
+      signalLevel,
+      recommendation,
+      signalColor,
+      chartData: recentData
     };
+
+  } catch (error) {
+    console.error("분석 실패:", error.message);
+    return {
+      date: new Date().toISOString().split('T')[0].replace(/-/g, ''),
+      latestSpread: 'N/A',
+      signalLevel: '연결 실패',
+      recommendation: `오류: ${error.message}`,
+      signalColor: 'red',
+      chartData: []
+    };
+  }
 }
 
 module.exports = { getInvestmentSignal };
