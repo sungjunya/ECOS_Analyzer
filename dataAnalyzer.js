@@ -17,7 +17,7 @@ const API_CONFIG = {
   P_START: 1,
   P_END: 1000,
   CYCLE: 'M',
-  START_DATE: '201001',
+  START_DATE: '201501',
   END_DATE: today,
   SPREAD_STAT_CODE: '721Y001',
   SPREAD_ITEM_CODE_3Y: '5020000',
@@ -133,16 +133,92 @@ function summarizeEconomy(spread, m2, cpi, ppi, trendSpread, trendM2, trendCPI) 
   } else {
     msg = '전반적으로 경제는 안정된 흐름을 보이고 있습니다. 큰 위기나 호황 없이, 비교적 차분한 상태입니다.';
   }
-  return `📊 현재 경제 요약: ${msg}`;
+  return `📊 일반 경제 요약: ${msg}`;
 }
 
-// ---------- 분류 ----------
-function classify(spread, m2, cpi) {
-  if (spread < 0 && m2 < 1) return { level: "경기 둔화", color: "red", description: "금리 역전과 돈의 흐름 둔화가 동시에 나타납니다." };
-  if (spread < 0.5 && cpi > 3) return { level: "물가 부담", color: "orange", description: "물가는 오르는데 경기는 약세입니다." };
-  if (spread < 1 && m2 > 1 && cpi < 3.5) return { level: "회복기", color: "yellow", description: "경기가 점차 회복 중입니다." };
-  if (spread >= 1 && cpi <= 3) return { level: "확장기", color: "green", description: "금리차와 물가 모두 안정되어 확장 국면입니다." };
-  return { level: "중립", color: "gray", description: "뚜렷한 신호 없음." };
+
+// 🚀 [새로운 기능] 신호 점수 계산 (0-100점)
+function getSignalScore(key, avgValue) {
+    switch (key) {
+        case 'spread': // 금리 스프레드 (높을수록 호황)
+            if (avgValue >= 1.0) return 100;
+            if (avgValue >= 0.5) return 75;
+            if (avgValue >= 0.0) return 50;
+            return 0; // 역전 또는 0 근방은 위험
+        case 'm2': // M2 증가율 (적절히 높을수록 좋음: 2%~4%)
+            if (avgValue >= 2.0 && avgValue <= 4.0) return 100;
+            if (avgValue > 4.0) return 75; // 유동성 과잉 우려
+            if (avgValue >= 0.0) return 50;
+            return 0; // 유동성 부족
+        case 'cpi': // CPI 증가율 (적절히 낮을수록 좋음: 1%~3%)
+            if (avgValue >= 1.0 && avgValue <= 3.0) return 100;
+            if (avgValue > 4.0 || avgValue < 0.0) return 0; // 고인플레이션 또는 디플레이션
+            return 50;
+        default:
+            return 50; 
+    }
+}
+
+// 🚀 [새로운 기능] 복합 점수 계산
+function calculateCompositeScore(scores) {
+    // 종합 점수 = (금리 신호 * 0.5) + (M2 신호 * 0.3) + (CPI 신호 * 0.2)
+    const score = (scores.spread * 0.5) + (scores.m2 * 0.3) + (scores.cpi * 0.2);
+    return Math.round(score);
+}
+
+// 🚀 [새로운 기능] 4단계 레벨 분류 및 추천
+function classifyAndRecommend(avgSpread, avgM2, avgCPI, trendM2, compositeScore) {
+    let result = { 
+        level: "중립", 
+        color: "gray", 
+        description: "현재 경제는 뚜렷한 신호 없이 중립적인 흐름을 보이고 있습니다.", 
+        recommendation: `종합 점수: ${compositeScore}점. 투자 방향성 판단을 보류하고 추가 지표를 확인하십시오.` 
+    };
+
+    // 'M2 증가율 둔화'를 '하락세' 추세 또는 M2 평균 2.0% 미만으로 해석
+    const isM2Slowdown = trendM2 === '하락세' || avgM2 < 2.0; 
+    // 'M2 증가율 견고'를 M2 평균 2.0% 이상으로 해석
+    const isM2Robust = avgM2 >= 2.0; 
+    // 'M2/CPI 모두 안정적'을 M2 2% 이상, CPI 3% 이하로 해석
+    const isM2AndCPIStable = avgM2 >= 2.0 && avgCPI <= 3.0; 
+
+    // 1. 🚨 최대 위험 (Red)
+    if (avgSpread <= 0 && isM2Slowdown) {
+        result.level = "최대 위험";
+        result.color = "red";
+        result.description = "경기 침체 및 유동성 수축 동시 발생.";
+        result.recommendation = "즉시 위험 자산 비중을 70% 이상 축소하고 채권/현금으로 전환하십시오.";
+        return result;
+    }
+
+    // 2. ✅ 최적 확장 (Green)
+    if (avgSpread >= 1.0 && isM2AndCPIStable) {
+        result.level = "최적 확장";
+        result.color = "green";
+        result.description = "이상적인 투자 환경.";
+        result.recommendation = "공격적인 주식 매수 및 장기 투자 비중 확대를 추천합니다.";
+        return result;
+    }
+
+    // 3. ⚠️ 긴축 경계 (Orange)
+    if (avgSpread > 0 && avgCPI > 4.0) {
+        result.level = "긴축 경계";
+        result.color = "orange";
+        result.description = "성장하지만 물가 위험이 과도함.";
+        result.recommendation = "중앙은행의 금리 인상 사이클에 대비하여 포트폴리오를 방어적으로 운용하고, 단기 고금리 자산에 투자하십시오.";
+        return result;
+    }
+
+    // 4. 🟡 안정 성장 (Yellow)
+    if (avgSpread >= 0.5 && isM2Robust) {
+        result.level = "안정 성장";
+        result.color = "yellow";
+        result.description = "유동성이 뒷받침되는 경기 확장 국면.";
+        result.recommendation = "주식 비중을 유지하되, 인플레이션 위험에 대비해 원자재나 실물 자산을 고려하십시오.";
+        return result;
+    }
+
+    return result;
 }
 
 // ---------- 메인 ----------
@@ -179,13 +255,25 @@ async function getInvestmentSignal(period = '1y') {
     const trendCPI = slopeToWord(slope(c));
     const trendPPI = slopeToWord(slope(p));
 
-    const classifyResult = classify(avgSpread, avgM2, avgCPI);
+    // 🚀 복합 점수 및 레벨 계산
+    const scores = {
+        spread: getSignalScore('spread', avgSpread),
+        m2: getSignalScore('m2', avgM2),
+        cpi: getSignalScore('cpi', avgCPI)
+    };
+    const compositeScore = calculateCompositeScore(scores);
+    const classifyResult = classifyAndRecommend(avgSpread, avgM2, avgCPI, trendM2, compositeScore);
+    
+    // 기존 통합 요약은 그대로 유지 (세부 맥락 제공용)
     const summary = summarizeEconomy(avgSpread, avgM2, avgCPI, avgPPI, trendSpread, trendM2, trendCPI);
 
     return {
       date: today,
       period: `${years}년`,
+      // 🚀 새로운 필드
       classification: classifyResult,
+      compositeScore: compositeScore,
+      // 기존 필드
       summary,
       indicators: {
         spread: { latest: avgSpread.toFixed(2), trend: trendSpread, description: explainSpread(avgSpread, trendSpread), color: classifyResult.color, chartData: s },

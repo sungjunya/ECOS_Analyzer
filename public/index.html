@@ -135,7 +135,6 @@
 
     <div class="summary" id="summary">로딩 중...</div>
 
-    <!-- ✅ 통합 경제 요약 박스 -->
     <div id="overall-summary">전체 경제 요약 로딩 중...</div>
 
     <div class="chart-container">
@@ -187,11 +186,25 @@
                 .then(r => r.json())
                 .then(data => {
                     const ym = `${data.date.slice(0, 4)}년 ${data.date.slice(4)}월`;
-                    const summaryText = `기준일: ${ym} · 기간: ${data.period} · ${data.classification?.level || ''}`;
-                    document.getElementById('summary').innerText = summaryText;
+                    
+                    // ✅ (수정) 새로운 분류 레벨, 색상, 종합 점수 적용
+                    const badgeClass = `badge ${data.classification.color}`;
+                    const classificationHTML = `<span class="${badgeClass}">${data.classification.level}</span>`;
+                    
+                    const summaryText = `기준일: ${ym} · 기간: ${data.period} · ${classificationHTML} · 종합 점수: <strong>${data.compositeScore}점</strong>`;
+                    document.getElementById('summary').innerHTML = summaryText; // innerText 대신 innerHTML 사용
 
-                    // ✅ 상단 경제 요약 표시
-                    document.getElementById('overall-summary').innerText = data.summary || '요약 데이터 없음';
+                    // ✅ (수정) 상단 경제 요약 박스에 투자 추천 메시지 표시
+                    document.getElementById('overall-summary').innerHTML = `
+                        <div style="font-weight: 600; margin-bottom: 8px; font-size: 1.1em;">
+                            📢 현재 시장 레벨: ${data.classification.level} (${data.classification.description})
+                        </div>
+                        <div style="font-size: 1.05em; color: #1f2937; margin-bottom: 12px;">
+                            ✅ 투자 방향성 추천: <strong>${data.classification.recommendation}</strong>
+                        </div>
+                        <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 12px 0;">
+                        ${data.summary}
+                    `;
 
                     // ✅ 각 지표별 차트 업데이트
                     updateChart('spread', data.indicators.spread);
@@ -220,9 +233,9 @@
 
             // 정보 표시
             infoEl.innerHTML = `
-        평균: <strong>${isNaN(info.latest) ? 'N/A' : info.latest + '%'}</strong>
-        <span style="margin-left:8px;color:#6b7280;">추세: ${trend}</span>
-      `;
+                평균: <strong>${isNaN(info.latest) ? 'N/A' : info.latest + (key === 'spread' ? 'pp' : '%')}</strong>
+                <span style="margin-left:8px;color:#6b7280;">추세: ${trend}</span>
+            `;
             descEl.textContent = info.description || '';
 
             // 기존 차트 삭제
