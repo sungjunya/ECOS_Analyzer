@@ -22,8 +22,15 @@ const API_CONFIG = {
   SPREAD_ITEM_CODE_10Y: '5050000',
 
   M2_STAT_CODE: '101Y004',
+  M2_ITEM_CODE: 'BBHA01',
+
+
   CPI_STAT_CODE: '102Y003',
-  PPI_STAT_CODE: '404Y014'
+  CPI_ITEM_CODE: 'ABA2',
+
+
+  PPI_STAT_CODE: '404Y014',
+  PPI_ITEM_CODE: '*AA'
 };
 
 async function fetchIndicatorData(statCode, itemCode = '') {
@@ -135,9 +142,10 @@ async function getInvestmentSignal(period = '1y') {
     const [d3Y, d10Y, dM2, dCPI, dPPI] = await Promise.all([
       fetchIndicatorData(API_CONFIG.SPREAD_STAT_CODE, API_CONFIG.SPREAD_ITEM_CODE_3Y),
       fetchIndicatorData(API_CONFIG.SPREAD_STAT_CODE, API_CONFIG.SPREAD_ITEM_CODE_10Y),
-      fetchIndicatorData(API_CONFIG.M2_STAT_CODE),
-      fetchIndicatorData(API_CONFIG.CPI_STAT_CODE),
-      fetchIndicatorData(API_CONFIG.PPI_STAT_CODE)
+      fetchIndicatorData(API_CONFIG.M2_STAT_CODE, API_CONFIG.M2_ITEM_CODE),
+      
+      fetchIndicatorData(API_CONFIG.CPI_STAT_CODE, API_CONFIG.CPI_ITEM_CODE),
+      fetchIndicatorData(API_CONFIG.PPI_STAT_CODE, API_CONFIG.PPI_ITEM_CODE)
     ]);
 
     const spread = calculateSpread(d3Y, d10Y);
