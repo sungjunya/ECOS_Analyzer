@@ -61,9 +61,16 @@
 
         .chart-container {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            /* 🚀 종합 차트를 위해 2열 레이아웃으로 변경 */
+            grid-template-columns: repeat(2, 1fr); 
             gap: 20px;
             margin-top: 20px;
+        }
+        
+        /* 🚀 종합 차트를 첫 행 전체로 확장 */
+        #chart-box-composite {
+            grid-column: 1 / -1; 
+            min-height: 250px;
         }
 
         .chart-box {
@@ -138,6 +145,11 @@
     <div id="overall-summary">전체 경제 요약 로딩 중...</div>
 
     <div class="chart-container">
+        <div class="chart-box" id="chart-box-composite">
+            <h3>📈 종합 투자 신호 점수 (가중치 적용 추이)</h3>
+            <canvas id="chart-composite"></canvas>
+        </div>
+
         <div class="chart-box">
             <h3>장단기 금리 스프레드</h3>
             <canvas id="chart-spread"></canvas>
@@ -192,7 +204,7 @@
                     const classificationHTML = `<span class="${badgeClass}">${data.classification.level}</span>`;
                     
                     const summaryText = `기준일: ${ym} · 기간: ${data.period} · ${classificationHTML} · 종합 점수: <strong>${data.compositeScore}점</strong>`;
-                    document.getElementById('summary').innerHTML = summaryText; // innerText 대신 innerHTML 사용
+                    document.getElementById('summary').innerHTML = summaryText; 
 
                     // ✅ (수정) 상단 경제 요약 박스에 투자 추천 메시지 표시
                     document.getElementById('overall-summary').innerHTML = `
@@ -206,6 +218,9 @@
                         ${data.summary}
                     `;
 
+                    // 🚀 종합 점수 차트 업데이트
+                    updateCompositeChart(data.compositeScoreHistory, data.classification.color);
+
                     // ✅ 각 지표별 차트 업데이트
                     updateChart('spread', data.indicators.spread);
                     updateChart('m2', data.indicators.m2);
@@ -217,7 +232,66 @@
                     document.getElementById('overall-summary').innerHTML = `<span style="color:red;">요약 불러오기 실패</span>`;
                 });
         }
+        
+        // 🚀 종합 점수 차트 생성 함수 추가
+        function updateCompositeChart(history, colorKey) {
+            const canvas = document.getElementById('chart-composite');
+            const ctx = canvas.getContext('2d');
+            
+            // 레벨 색상 매핑
+            const colors = {
+                green: '#10b981',
+                yellow: '#f59e0b',
+                orange: '#f97316',
+                red: '#ef4444',
+                gray: '#6b7280'
+            };
+            const chartColor = colors[colorKey] || colors.gray;
 
+            if (charts['composite']) charts['composite'].destroy();
+
+            const labels = history.map(d => d.time.slice(0, 4) + '.' + d.time.slice(4));
+            const values = history.map(d => d.value);
+
+            charts['composite'] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '종합 점수',
+                        data: values,
+                        borderColor: chartColor,
+                        backgroundColor: chartColor + '30', // 약간 투명한 배경색
+                        tension: 0.3,
+                        pointRadius: 3,
+                        fill: true // 아래 영역 채우기
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => `점수: ${ctx.parsed.y}점`
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            min: 0,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '점수 (0-100)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // 개별 지표 차트 함수 (기존 유지)
         function updateChart(key, info) {
             const canvas = document.getElementById(`chart-${key}`);
             const ctx = canvas.getContext('2d');

@@ -1,4 +1,4 @@
-// 📊 dataAnalyzer.js
+// 📊 dataAnalyzer.js (전체 코드 - Composite Score History 추가)
 const axios = require('axios');
 
 // 날짜
@@ -17,7 +17,7 @@ const API_CONFIG = {
   P_START: 1,
   P_END: 1000,
   CYCLE: 'M',
-  START_DATE: '201501',
+  START_DATE: '201001',
   END_DATE: today,
   SPREAD_STAT_CODE: '721Y001',
   SPREAD_ITEM_CODE_3Y: '5020000',
@@ -221,6 +221,35 @@ function classifyAndRecommend(avgSpread, avgM2, avgCPI, trendM2, compositeScore)
     return result;
 }
 
+// 🚀 [새로운 기능] 과거 데이터에 대한 종합 점수 계산
+function calculateCompositeHistory(spreadData, m2Data, cpiData) {
+    const history = [];
+    // 지표 데이터를 시간(time)을 키로 하는 맵으로 변환
+    const m2Map = new Map(m2Data.map(d => [d.time, d.value]));
+    const cpiMap = new Map(cpiData.map(d => [d.time, d.value]));
+
+    // 스프레드 데이터를 기준으로 순회
+    spreadData.forEach(sData => {
+        const time = sData.time;
+        const spreadValue = sData.value;
+        const m2Value = m2Map.get(time);
+        const cpiValue = cpiMap.get(time);
+        
+        // 세 지표 모두 데이터가 있을 때만 점수 계산
+        if (m2Value !== undefined && cpiValue !== undefined) {
+            const scores = {
+                spread: getSignalScore('spread', spreadValue),
+                m2: getSignalScore('m2', m2Value),
+                cpi: getSignalScore('cpi', cpiValue)
+            };
+            const compositeScore = calculateCompositeScore(scores);
+            history.push({ time, value: compositeScore });
+        }
+    });
+
+    return history;
+}
+
 // ---------- 메인 ----------
 async function getInvestmentSignal(period = '1y') {
   const yearsMap = { '1y': 1, '3y': 3, '5y': 5 };
@@ -235,16 +264,18 @@ async function getInvestmentSignal(period = '1y') {
       fetchIndicatorData(API_CONFIG.PPI_STAT_CODE, API_CONFIG.PPI_ITEM_CODE)
     ]);
 
-    const spread = calculateSpread(d3Y, d10Y);
-    const m2 = calculateYoY(dM2);
-    const cpi = calculateYoY(dCPI);
-    const ppi = calculateYoY(dPPI);
+    const spreadRaw = calculateSpread(d3Y, d10Y);
+    const m2Raw = calculateYoY(dM2);
+    const cpiRaw = calculateYoY(dCPI);
+    const ppiRaw = calculateYoY(dPPI);
 
-    const s = sliceYears(spread, years);
-    const m = sliceYears(m2, years);
-    const c = sliceYears(cpi, years);
-    const p = sliceYears(ppi, years);
+    // 기간별 데이터 필터링
+    const s = sliceYears(spreadRaw, years);
+    const m = sliceYears(m2Raw, years);
+    const c = sliceYears(cpiRaw, years);
+    const p = sliceYears(ppiRaw, years);
 
+    // 현재/평균 계산 (화면 표시용)
     const avgSpread = avg(s);
     const avgM2 = avg(m);
     const avgCPI = avg(c);
@@ -255,7 +286,7 @@ async function getInvestmentSignal(period = '1y') {
     const trendCPI = slopeToWord(slope(c));
     const trendPPI = slopeToWord(slope(p));
 
-    // 🚀 복합 점수 및 레벨 계산
+    // 🚀 복합 점수 및 레벨 계산 (최근 데이터 기준)
     const scores = {
         spread: getSignalScore('spread', avgSpread),
         m2: getSignalScore('m2', avgM2),
@@ -264,7 +295,10 @@ async function getInvestmentSignal(period = '1y') {
     const compositeScore = calculateCompositeScore(scores);
     const classifyResult = classifyAndRecommend(avgSpread, avgM2, avgCPI, trendM2, compositeScore);
     
-    // 기존 통합 요약은 그대로 유지 (세부 맥락 제공용)
+    // 🚀 복합 점수 시계열 계산 (차트 표시용)
+    const compositeScoreHistory = calculateCompositeHistory(s, m, c);
+
+    // 기존 통합 요약
     const summary = summarizeEconomy(avgSpread, avgM2, avgCPI, avgPPI, trendSpread, trendM2, trendCPI);
 
     return {
@@ -273,6 +307,7 @@ async function getInvestmentSignal(period = '1y') {
       // 🚀 새로운 필드
       classification: classifyResult,
       compositeScore: compositeScore,
+      compositeScoreHistory: compositeScoreHistory, // 🚀 추가된 시계열 데이터
       // 기존 필드
       summary,
       indicators: {
