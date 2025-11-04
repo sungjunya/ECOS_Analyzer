@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECOS 종합 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="main-wrapper">
+        <div class="main-content">
+            <h1>📊 ECOS 종합 경제·부동산 대시보드</h1>
+
+            <div class="nav">
+                <button id="btn-economy" class="active" onclick="switchTab('economy')">경제 신호</button>
+                <button id="btn-realestate" onclick="switchTab('realestate')">부동산 신호</button>
+
+                <button onclick="window.open('http://localhost:8501', '_blank')"
+                    style="background: #e9940c; color: white; font-weight: 600;">
+                    📈 LSTM 예측
+                </button>
+            </div>
+
+            <div class="tabs">
+                <div id="economy-tab">
+                    <div class="period">
+                        <button id="economy-btn-1y" class="active" onclick="setEconomyPeriod('1y')">1년</button>
+                        <button id="economy-btn-3y" onclick="setEconomyPeriod('3y')">3년</button>
+                        <button id="economy-btn-5y" onclick="setEconomyPeriod('5y')">5년</button>
+                    </div>
+
+                    <div class="summary" id="summary">로딩 중...</div>
+
+                    <div id="overall-summary">
+                        <div id="eco-risk-level" class="color-gray">전체 경제 요약 로딩 중</div>
+                        <div id="eco-description">분석 중...</div>
+                        <div id="eco-recommendation">투자 전략 로딩 중...</div>
+                    </div>
+
+
+                    <div class="chart-container">
+                        <div class="chart-box" id="chart-box-composite">
+                            <h3>📈 종합 투자 신호 점수</h3>
+                            <canvas id="chart-composite"></canvas>
+                        </div>
+
+                        <div class="chart-box">
+                            <h3>금리 스프레드 <span class="definition-icon" data-word="금리 스프레드">ⓘ</span></h3>
+                            <canvas id="chart-spread"></canvas>
+                        </div>
+
+                        <div class="chart-box">
+                            <h3>M2 증가율 <span class="definition-icon" data-word="M2 (광의통화)">ⓘ</span></h3>
+                            <canvas id="chart-m2"></canvas>
+                        </div>
+
+                        <div class="chart-box">
+                            <h3>CPI <span class="definition-icon" data-word="소비자물가지수">ⓘ</span></h3>
+                            <canvas id="chart-cpi"></canvas>
+                        </div>
+
+                        <div class="chart-box">
+                            <h3>PPI <span class="definition-icon" data-word="생산자물가지수">ⓘ</span></h3>
+                            <canvas id="chart-ppi"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="realestate-tab" style="display:none;">
+                    <div class="period">
+                        <button id="re-btn-1y" onclick="setREPeriod('1y')">1년</button>
+                        <button id="re-btn-3y" onclick="setREPeriod('3y')">3년</button>
+                        <button id="re-btn-5y" class="active" onclick="setREPeriod('5y')">5년</button>
+                    </div>
+
+                    <div class="summary" id="re-summary">부동산 데이터 로딩 중...</div>
+
+                    <div id="re-box-summary">
+                        <div id="re-risk-level" class="color-gray">부동산 경기 위험 등급 로딩 중</div>
+                        <div id="re-risk-description">분석 중...</div>
+                        <div id="re-risk-recommendation">투자 대응 전략 로딩 중...</div>
+                    </div>
+
+                    <div class="chart-container">
+                        <div class="chart-box">
+                            <h3>🏠 주택매매가격지수 (YoY) <span class="definition-icon" data-word="주택매매가격지수">ⓘ</span></h3>
+                            <canvas id="re-sale"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h3>전세가격지수 (YoY) <span class="definition-icon" data-word="전세가격지수">ⓘ</span></h3>
+                            <canvas id="re-rent"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h3>건축허가 연면적 (YoY) <span class="definition-icon" data-word="건축허가 연면적">ⓘ</span></h3>
+                            <canvas id="re-permit"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h3>기준금리 <span class="definition-icon" data-word="기준금리">ⓘ</span></h3>
+                            <canvas id="re-rate"></canvas>
+                        </div>
+                        <div class="chart-box">
+                            <h3>M2 증가율 (YoY) <span class="definition-icon" data-word="M2 (광의통화)">ⓘ</span></h3>
+                            <canvas id="re-m2"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="news-sidebar">
+            <h2
+                style="font-size: 1.2em; font-weight: 700; color: #1f2937; margin-bottom: 12px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px;">
+                📰 실시간 뉴스
+            </h2>
+
+            <div style="display: flex; gap: 8px; margin-bottom: 15px;">
+                <input type="text" id="news-search-input" placeholder="뉴스 검색어 (예: 금리 인상)"
+                    onkeypress="if(event.key === 'Enter') handleNewsSearch();">
+                <button onclick="handleNewsSearch()" class="search-button">
+                    검색
+                </button>
+            </div>
+
+            <div id="news-feed-container" class="space-y-3">
+                <p style="color: #6b7280; text-align: center; padding: 10px;">최신 뉴스를 불러오는 중입니다...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="definition-modal" style="display: none;">
+        <div>
+            <h3 id="modal-title"
+                style="font-size: 1.2em; font-weight: 700; margin-bottom: 10px; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px;">
+            </h3>
+            <div id="modal-definition">
+            </div>
+            <button onclick="document.getElementById('definition-modal').style.display='none';"
+                style="margin-top: 15px; width: 100%; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                닫기
+            </button>
+        </div>
+    </div>
+
+
+    <script>
+        let currentTab = 'economy';
+        let currentEconomyPeriod = '1y'; // 경제 탭 기간
+        let currentREPeriod = '5y'; // 부동산 탭 기간 (기본 5년)
+        const charts = {};
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('economy-tab').style.display = tab === 'economy' ? 'block' : 'none';
+            document.getElementById('realestate-tab').style.display = tab === 'realestate' ? 'block' : 'none';
+            document.getElementById('btn-economy').classList.toggle('active', tab === 'economy');
+            document.getElementById('btn-realestate').classList.toggle('active', tab === 'realestate');
+            if (tab === 'economy') loadEconomy();
+            else loadRealEstate();
+        }
+
+        // 👇 경제 탭 기간 설정 함수
+        function setEconomyPeriod(period) {
+            currentEconomyPeriod = period;
+            ['1y', '3y', '5y'].forEach(p => {
+                document.getElementById(`economy-btn-${p}`).classList.toggle('active', p === period);
+            });
+            loadEconomy();
+        }
+
+        // 🚀 부동산 탭 기간 설정 함수
+        function setREPeriod(period) {
+            currentREPeriod = period;
+            ['1y', '3y', '5y'].forEach(p => {
+                document.getElementById(`re-btn-${p}`).classList.toggle('active', p === period);
+            });
+            loadRealEstate();
+        }
+
+
+        // 🟢 경제 신호 로드
+        async function loadEconomy() {
+            document.getElementById('summary').innerText = '데이터 로딩 중...';
+            const res = await fetch(`/api/signal?period=${currentEconomyPeriod}`);
+            const data = await res.json();
+
+            if (!data.indicators) {
+                document.getElementById('summary').innerText = `데이터 로드 실패: ${data.error || '알 수 없는 오류'}`;
+                return;
+            }
+
+            // 경제 신호 UI 업데이트
+            document.getElementById('summary').innerHTML =
+                `📅 ${data.date} (${data.period}) | <span class="badge ${data.classification.color}">${data.classification.level}</span> 종합 점수: <strong>${data.compositeScore}</strong>`;
+
+            // 🚀 [수정] 경제 신호 요약 박스 (부동산과 동일한 구조로 변경)
+            const colorClass = 'color-' + data.classification.color;
+            document.getElementById('overall-summary').innerHTML = `
+                <div id="eco-risk-level" class="${colorClass}">
+                    ${data.classification.level} (${data.compositeScore}점)
+                </div>
+                <div id="eco-description">
+                    ${data.classification.description}
+                </div>
+                <div id="eco-recommendation">
+                    ✅ 투자 방향성 추천: <strong>${data.classification.recommendation}</strong>
+                </div>
+            `;
+
+            // 차트 업데이트 (색상 통일)
+            updateChart('chart-composite', data.compositeScoreHistory, '#3b82f6', '종합 점수', '%', data.classification.color);
+            updateChart('chart-spread', data.indicators.spread.chartData, '#ef4444', '금리 스프레드', 'pp', data.classification.color);
+            updateChart('chart-m2', data.indicators.m2.chartData, '#3b82f6', 'M2 증가율', '%', data.classification.color);
+            updateChart('chart-cpi', data.indicators.cpi.chartData, '#f59e0b', 'CPI 증가율', '%', data.classification.color);
+            updateChart('chart-ppi', data.indicators.ppi.chartData, '#10b981', 'PPI 증가율', '%', data.classification.color);
+        }
+
+        // 🏠 부동산 신호 로드
+        async function loadRealEstate() {
+            document.getElementById('re-summary').innerText = '데이터 로딩 중...';
+            const res = await fetch(`/api/realestate?period=${currentREPeriod}`);
+            const data = await res.json();
+
+            if (data.error) {
+                document.getElementById('re-summary').innerText = `데이터 로드 실패: ${data.error}`;
+                document.getElementById('re-risk-level').innerText = "에러 발생";
+                document.getElementById('re-risk-level').className = 'color-red';
+                return;
+            }
+
+            const risk = data.risk;
+            const colorClass = 'color-' + risk.color;
+
+            // 🚀 부동산 신호 UI 업데이트
+            document.getElementById('re-summary').innerHTML =
+                `📅 ${data.date} (${data.period}) | <span class="badge ${risk.color}">${risk.level.split(' ')[0].trim()}</span>`;
+
+            // 🚀 [수정] #re-box-summary에 = 연산자 사용하여 내용 덮어쓰기 (중첩 버그 해결)
+            document.getElementById('re-box-summary').innerHTML = `
+                <div id="re-risk-level" class="${colorClass}">${risk.level}</div>
+                <div id="re-risk-description">${risk.summary}</div>
+                <div id="re-risk-recommendation">👉 ${risk.recommendation}</div>
+                <hr style="margin: 15px 0 10px 0; border: 0; border-top: 1px dashed #e5e7eb;">
+                <div style="font-size: 0.9em; color: #4b5563;">
+                    ${data.cycleTitle} : ${data.cycleMessage}
+                </div>
+            `;
+
+            // 🚀 차트 데이터 업데이트 (YoY 지표 사용)
+            updateChart('re-sale', data.indicators.salePriceYoY.chartData, '#ef4444', '매매가격 YoY', '%', risk.color);
+            updateChart('re-rent', data.indicators.rentPriceYoY.chartData, '#f59e0b', '전세가격 YoY', '%', risk.color);
+            updateChart('re-permit', data.indicators.permitYoY.chartData, '#3b82f6', '건축허가 YoY', '%', risk.color);
+            updateChart('re-rate', data.indicators.interestRate.chartData, '#10b981', '기준금리', '%', risk.color);
+            updateChart('re-m2', data.indicators.m2YoY.chartData, '#9051d9', 'M2 증가율 YoY', '%', risk.color);
+
+        }
+
+        // 🚀 통합 차트 업데이트 함수
+        function updateChart(id, data, defaultColor, label = '', unit = '%', colorKey = 'gray') {
+            if (!data || data.length === 0) {
+                const container = document.getElementById(id).parentElement;
+                if (container) {
+                    container.innerHTML = `<div style="text-align: center; padding: 50px;">데이터 없음</div>`;
+                }
+                return;
+            }
+
+            const ctx = document.getElementById(id).getContext('2d');
+            const labels = data.map(d => d.time.slice(0, 4) + '.' + d.time.slice(4));
+            const values = data.map(d => d.value);
+
+            // 차트 라인 색상 결정 (부동산 탭은 위험 등급 색상 사용)
+            let chartLineColor = defaultColor;
+            if (id.startsWith('re-')) {
+                switch (colorKey) {
+                    case 'red': chartLineColor = '#ef4444'; break;
+                    case 'orange': chartLineColor = '#f97316'; break;
+                    case 'yellow': chartLineColor = '#f59e0b'; break;
+                    case 'green': chartLineColor = '#10b981'; break;
+                    case 'blue': chartLineColor = '#3b82f6'; break;
+                    default: chartLineColor = defaultColor;
+                }
+            }
+
+
+            if (charts[id]) charts[id].destroy();
+            charts[id] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label,
+                        data: values,
+                        borderColor: chartLineColor,
+                        backgroundColor: chartLineColor + '30',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 6 } },
+                        y: {
+                            beginAtZero: false,
+                            title: { display: true, text: unit }
+                        }
+                    }
+                }
+            });
+        }
+
+        // =========================================================================
+        // 5. 🚀 뉴스 피드 통합 및 검색 함수 (요약 추가)
+        // =========================================================================
+        const newsContainer = document.getElementById('news-feed-container');
+        const newsSearchInput = document.getElementById('news-search-input');
+
+        // 🚀 신규: 검색 버튼 클릭 시 실행될 함수
+        function handleNewsSearch() {
+            const keyword = newsSearchInput.value.trim();
+            if (keyword) {
+                loadNews(keyword);
+            } else {
+                // 검색어가 비어있을 경우 기본 키워드로 검색
+                loadNews('경제 동향');
+            }
+        }
+
+        async function loadNews(keyword = '경제 동향') { // 기본 키워드 설정
+            newsContainer.innerHTML = '<p style="color: #6b7280; text-align: center; padding: 10px; font-size: 0.9em;">' + keyword + ' 관련 최신 뉴스를 불러오는 중입니다...</p>';
+
+            // 검색 키워드를 헤더에 반영
+            document.querySelector('.news-sidebar h2').innerHTML = `
+                📰 실시간 뉴스 (${keyword})
+            `;
+
+            try {
+                // 서버의 /api/news 라우트 호출 (server.js에 이 라우트가 구현되어 있어야 함)
+                const response = await fetch(`/api/news?query=${encodeURIComponent(keyword)}`);
+                const data = await response.json();
+
+                if (data.success && data.news && data.news.length > 0) {
+                    newsContainer.innerHTML = ''; // 기존 내용 초기화
+
+                    data.news.forEach(item => {
+                        const newsItem = document.createElement('div');
+                        newsItem.className = 'news-item';
+
+                        // 네이버 API의 title/description은 HTML 태그를 포함하므로, innerHTML 사용
+                        // 💡 수정: 요약(description)을 추가
+                        newsItem.innerHTML = `
+                            <a href="${item.link}" target="_blank">${item.title}</a>
+                            <p class="news-description">${item.description}</p>
+                            <p style="font-size: 0.75em; color: #9ca3af; margin-top: 5px;">${new Date(item.pubDate).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' })}</p>
+                        `;
+                        newsContainer.appendChild(newsItem);
+                    });
+                } else {
+                    newsContainer.innerHTML = `<p style="color: #6b7280; text-align: center; padding: 10px; font-size: 0.9em;">'${keyword}'에 대한 뉴스를 찾을 수 없습니다.</p>`;
+                }
+
+            } catch (error) {
+                console.error('Error fetching news:', error);
+                newsContainer.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 10px; font-size: 0.9em;">뉴스 데이터 로드 중 오류 발생.</p>';
+            }
+        }
+
+        // =========================================================================
+        // 6. 🚀 ECOS 통계 용어사전 통합 함수 (모달 사용, 정의 내장)
+        // =========================================================================
+        const modal = document.getElementById('definition-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalDefinition = document.getElementById('modal-definition');
+
+        // 💡 신규: 핵심 지표 용어 정의를 내장합니다.
+        const definitionMap = {
+            "금리 스프레드": "장기 금리와 단기 금리의 차이입니다. 일반적으로 장기 금리가 단기보다 높지만, 경기 침체 우려 시 역전(장기 < 단기)되며 불황의 신호로 해석될 수 있습니다.",
+            "M2 (광의통화)": "현금, 요구불예금, 수시입출금식 예금 등 좁은 의미의 통화(M1)에 2년 미만 정기 예적금, 시장형 상품 등을 합친 통화량 지표입니다. 시중의 유동성 규모를 나타냅니다.",
+            "소비자물가지수": "CPI (Consumer Price Index)는 도시 가구가 소비하는 상품과 서비스의 가격 변동을 측정하는 지표로, 일반적인 인플레이션 수준을 파악하는 데 사용됩니다.",
+            "생산자물가지수": "PPI (Producer Price Index)는 국내 생산자가 국내 시장에 공급하는 상품과 서비스의 평균 가격 변동을 측정합니다. CPI의 선행 지표로 간주되기도 합니다.",
+            "주택매매가격지수": "전국의 주택 매매 가격 변동을 나타내는 지표입니다. 전년 대비 증감률(YoY)은 매매 가격의 변화 속도를 보여줍니다.",
+            "전세가격지수": "전국의 주택 전세 가격 변동을 나타내는 지표입니다. 전세 가격은 실수요와 주택 시장의 수급 상황을 반영합니다.",
+            "건축허가 연면적": "미래 건설 경기를 예측하는 선행 지표입니다. 건축 허가를 받은 건물의 전체 연면적으로, 향후 주택 공급 물량을 가늠할 수 있습니다.",
+            "기준금리": "한국은행 금융통화위원회에서 결정하는 금리로, 금융기관 간의 거래 기준이 되며 시중 금리 및 통화 정책의 근간이 됩니다."
+        };
+
+        async function showDefinition(word) {
+            modalTitle.textContent = `[${word}] 정의`;
+            modalDefinition.innerHTML = '<p style="text-align: center; padding: 15px;">용어 설명을 불러오는 중...</p>';
+            modal.style.display = 'flex'; // 모달 표시
+
+            // 💡 1. 내장된 정의 맵에서 먼저 찾습니다.
+            if (definitionMap[word]) {
+                const cleanDefinition = definitionMap[word].replace(/\n/g, '<br>');
+                modalDefinition.innerHTML = cleanDefinition;
+                return; // 내장된 정의를 찾았으므로 API 호출을 건너뛰고 모달을 표시
+            }
+
+            // 2. 내장된 정의가 없을 경우 API 호출 (폴백)
+            try {
+                const response = await fetch(`/api/definition?word=${encodeURIComponent(word)}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const cleanDefinition = data.definition.replace(/\n/g, '<br>');
+                    modalDefinition.innerHTML = cleanDefinition;
+                } else {
+                    if (data.definition.includes('용어를 찾을 수 없습니다') || !data.definition) {
+                        modalDefinition.innerHTML = `<p style="text-align: center; padding: 15px; color: #f97316;">
+                            [${word}]에 대한 정확한 용어사전 정보가 없습니다.<br>
+                            다른 용어로 검색해 보거나, 정의가 없는 용어일 수 있습니다.
+                        </p>`;
+                    } else {
+                        modalDefinition.innerHTML = `<p style="color: #ef4444; text-align: center; padding: 15px;">${data.error || data.definition}</p>`;
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching definition:', error);
+                modalDefinition.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 15px;">용어사전 데이터 로드 중 오류 발생.</p>';
+            }
+        }
+
+        // ⓘ 아이콘 클릭 이벤트를 document 전체에 설정 (Delegate pattern)
+        document.addEventListener('click', (event) => {
+            const icon = event.target.closest('.definition-icon');
+            if (icon) {
+                const word = icon.dataset.word;
+                showDefinition(word);
+            }
+        });
+
+        // =========================================================================
+        // 7. 초기 로드
+        // =========================================================================
+        loadEconomy();
+        document.getElementById('re-btn-5y').classList.add('active');
+
+        // 🚀 신규: 뉴스 피드 초기 로드 (기본 키워드로 시작)
+        loadNews('경제 동향'); 
+    </script>
+</body>
+
+</html>

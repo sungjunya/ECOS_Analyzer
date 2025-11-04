@@ -1,0 +1,370 @@
+/* * 🚀 style.css
+ * index.html의 모든 스타일을 포함합니다.
+ */
+
+ body {
+    font-family: "Noto Sans KR", sans-serif;
+    margin: 20px;
+    background: #f9fafb;
+    color: #111827;
+}
+
+/* 🚀 메인 콘텐츠 및 사이드바 레이아웃 */
+.main-wrapper {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+@media (min-width: 1024px) {
+    .main-wrapper {
+        flex-direction: row;
+        /* 데스크탑: 가로 배치 */
+    }
+}
+
+.main-content {
+    flex-grow: 1;
+}
+
+/* 🚀 뉴스 사이드바 스타일 */
+.news-sidebar {
+    width: 100%;
+    flex-shrink: 0;
+    padding: 16px;
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    height: fit-content;
+}
+
+@media (min-width: 1024px) {
+    .news-sidebar {
+        width: 320px;
+    }
+}
+
+/* 💡 뉴스 아이템 스타일 */
+.news-item {
+    padding: 10px 0;
+    border-bottom: 1px dashed #e5e7eb;
+    font-size: 0.9em;
+}
+
+.news-item:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.news-item a {
+    font-weight: 600;
+    color: #1f2937;
+    text-decoration: none;
+    display: block;
+    margin-bottom: 4px;
+    line-height: 1.4;
+}
+
+/* 💡 뉴스 요약 스타일 */
+.news-description {
+    font-size: 0.8em;
+    color: #4b5563;
+    line-height: 1.4;
+    margin-top: 4px;
+}
+
+
+.news-item a:hover {
+    color: #3b82f6;
+    text-decoration: underline;
+}
+
+/* 🚀 용어 정의 아이콘 스타일 */
+.definition-icon {
+    cursor: pointer;
+    color: #3b82f6;
+    margin-left: 0.25rem;
+    font-size: 0.9em;
+    font-weight: bold;
+    display: inline-block;
+    vertical-align: top;
+    transition: color 0.2s;
+}
+
+.definition-icon:hover {
+    color: #1e40af;
+}
+
+/* 🚀 모달(팝업) 스타일 */
+#definition-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+#definition-modal>div {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+#modal-definition {
+    line-height: 1.6;
+    font-size: 0.95em;
+}
+
+#modal-definition::-webkit-scrollbar {
+    width: 6px;
+}
+
+#modal-definition::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 10px;
+}
+
+/* 기존 스타일 유지 */
+h1 {
+    text-align: center;
+    color: #1f2937;
+    margin-bottom: 20px;
+}
+
+.nav {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.nav button {
+    padding: 10px 18px;
+    margin: 0 5px;
+    font-size: 15px;
+    border: none;
+    border-radius: 8px;
+    background: #e5e7eb;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.nav button.active {
+    background: #3b82f6;
+    color: #fff;
+}
+
+.period {
+    text-align: center;
+    margin-bottom: 16px;
+}
+
+.period button {
+    padding: 6px 12px;
+    margin: 0 4px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #f3f4f6;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 14px;
+}
+
+.period button.active {
+    background: #3b82f6;
+    color: white;
+}
+
+.summary {
+    text-align: center;
+    font-weight: 500;
+    font-size: 1.05em;
+    margin-bottom: 16px;
+}
+
+#overall-summary {
+    /* 🚀 스타일 통일을 위해 패딩, 그림자 등 유지 */
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 20px;
+    /* 부동산과 맞춤 */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    /* 부동산과 맞춤 */
+    line-height: 1.6;
+    font-size: 0.95em;
+    margin: 10px auto 30px auto;
+    /* 부동산과 맞춤 */
+    max-width: 800px;
+    /* 부동산과 맞춤 */
+}
+
+/* 🚀 경제 신호 전용 스타일 추가 (부동산 re-risk-level과 유사하게) */
+#eco-risk-level {
+    font-size: 1.8em;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+#eco-description {
+    font-size: 1.1em;
+    text-align: center;
+    margin-bottom: 15px;
+    color: #4b5563;
+}
+
+#eco-recommendation {
+    font-size: 1.15em;
+    font-weight: 600;
+    padding: 10px 0;
+    border-top: 1px dashed #e5e7eb;
+    color: #0d6efd;
+    text-align: center;
+}
+
+#re-box-summary {
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 10px auto 30px auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    max-width: 800px;
+}
+
+#re-risk-level {
+    font-size: 1.8em;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+#re-risk-description {
+    font-size: 1.1em;
+    text-align: center;
+    margin-bottom: 15px;
+    color: #4b5563;
+}
+
+#re-risk-recommendation {
+    font-size: 1.15em;
+    font-weight: 600;
+    padding: 10px 0;
+    border-top: 1px dashed #e5e7eb;
+    color: #0d6efd;
+    text-align: center;
+}
+
+.color-red {
+    color: #ef4444;
+}
+
+.color-orange {
+    color: #f97316;
+}
+
+.color-yellow {
+    color: #f59e0b;
+}
+
+.color-green {
+    color: #10b981;
+}
+
+.color-blue {
+    color: #3b82f6;
+}
+
+.color-gray {
+    color: #6b7280;
+}
+
+.chart-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 20px;
+}
+
+#chart-box-composite {
+    grid-column: 1 / -1;
+}
+
+.chart-box {
+    background: white;
+    border: 1px solid #d1d5db;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: white;
+    margin-left: 8px;
+}
+
+.badge.green {
+    background: #10b981;
+}
+
+.badge.yellow {
+    background: #f59e0b;
+}
+
+.badge.orange {
+    background: #f97316;
+}
+
+.badge.red {
+    background: #ef4444;
+}
+
+.badge.gray {
+    background: #6b7280;
+}
+
+.footer {
+    text-align: center;
+    margin-top: 40px;
+    font-size: 0.9em;
+    color: #6b7280;
+}
+
+/* 🚀 신규: 검색 입력 필드 스타일 */
+#news-search-input {
+    width: 100%;
+    flex-grow: 1;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 0.9em;
+    box-sizing: border-box;
+    /* 패딩이 너비에 포함되도록 */
+}
+
+.search-button {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.9em;
+    background: #3b82f6;
+    border: none;
+    cursor: pointer;
+    color: white;
+    white-space: nowrap;
+    /* 버튼 텍스트가 줄바꿈되지 않도록 */
+}
