@@ -1,17 +1,90 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-import yfinance as yf
+from datetime import datetime, timedelta
 import os
+import yfinance as yf
 
+# 💡 lstm_model.py, predict.py, data_loader.py 파일이 같은 폴더에 있어야 합니다.
+try:
+    from lstm_model import train_lstm_model
+    from predict import predict_next_month
+    from data_loader import load_stock_data
+    # 💡 오류 수정: HAS_MODEL_FILES 정의
+    HAS_MODEL_FILES = True
+except ImportError as e:
+    st.warning(f"경고: 필요한 모듈(lstm_model, predict, data_loader) 중 일부를 찾을 수 없습니다. ({e})")
+    st.warning("모델 학습 및 예측 기능이 비활성화됩니다. 파일을 확인해 주세요.")
+    # 💡 오류 수정: HAS_MODEL_FILES 정의
+    HAS_MODEL_FILES = False
+
+# ── 설정 ──
 st.set_page_config(page_title="LSTM 예측기", layout="wide")
 st.title("주식 이름으로 LSTM 예측")
+
+# =========================================================================
+# 💡 Plotly 시각화 함수 (30일 예측 차트)
+# =========================================================================
+def visualize_prediction(df_actual, df_prediction, symbol):
+    """실제 주가와 30일 예측 추이를 Plotly로 시각화합니다."""
+    
+    # 1. 실제 주가 데이터
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df_actual.index, 
+        y=df_actual['Close'], 
+        name='실제 주가', 
+        line=dict(color='blue')
+    ))
+
+    # 2. 예측 추이 데이터 (점선)
+    # 예측 시작점(실제 마지막 날)과 예측 첫날을 연결하기 위해 실제 마지막 데이터 포인트 추가
+    last_actual_point = pd.DataFrame(
+        {'Close': df_actual['Close'].iloc[-1]}, 
+        index=[df_actual.index[-1]]
+    )
+    
+    # 실제 마지막 날 + 예측 데이터 연결 (차트 상에서 선이 이어지도록)
+    combined_df = pd.concat([last_actual_point, df_prediction])
+    
+    fig.add_trace(go.Scatter(
+        x=combined_df.index,
+        y=combined_df['Close'],
+        name='30일 예측 추이',
+        line=dict(dash='dot', color='red', width=2)
+    ))
+
+    # 3. 30일 후 최종 예측 가격 (마커)
+    final_price = df_prediction['Close'].iloc[-1]
+    final_prediction_date = df_prediction.index[-1]
+    
+    fig.add_trace(go.Scatter(
+        x=[final_prediction_date],
+        y=[final_price],
+        mode='markers+text',
+        name='최종 예측 가격',
+        text=[f"{final_price:,.0f}원"],
+        textposition='top center',
+        marker=dict(size=10, color='red')
+    ))
+
+    # 레이아웃 설정
+    fig.update_layout(
+        title=f"{symbol} 주가 (실제 vs. 30일 예측)",
+        yaxis_title="가격 (KRW)",
+        xaxis_title="날짜",
+        height=500,
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+    )
+    # 💡 Streamlit 경고 해결: use_container_width=True 대신 width='stretch' 사용
+    st.plotly_chart(fig, width='stretch')
 
 # =========================================================================
 # 💡 인기 검색 종목 데이터 및 함수
 # =========================================================================
 def get_top_stocks():
-    # 인기 종목의 티커와 표시할 이름을 정의합니다. (yfinance에서 사용되는 티커)
+    """인기 종목의 실시간 주가와 등락률을 가져옵니다."""
     TOP_TICKERS = {
         "005930.KS": "삼성전자",
         "373220.KS": "LG에너지솔루션",
@@ -19,22 +92,18 @@ def get_top_stocks():
         "005490.KS": "POSCO홀딩스",
         "035420.KS": "네이버",
     }
-    
     top_stocks_list = []
     
-    # yfinance를 사용하여 실시간 데이터를 가져옵니다.
     for ticker, name in TOP_TICKERS.items():
         try:
-            # 2일치 데이터로 현재 주가와 전일 대비 등락률을 계산
+            # yfinance는 한국 주식의 경우 'Adj Close'를 사용하며, 'Close' 가격이 변동될 수 있습니다.
             stock_info = yf.Ticker(ticker).history(period="2d")
             
+            current_price = stock_info['Close'].iloc[-1] if not stock_info.empty else 0
             if len(stock_info) >= 2:
-                current_price = stock_info['Close'].iloc[-1]
                 previous_close = stock_info['Close'].iloc[-2]
                 change_pct = ((current_price - previous_close) / previous_close) * 100
             else:
-                # 데이터가 2일 미만일 경우 최신 가격만 사용
-                current_price = stock_info['Close'].iloc[-1] if not stock_info.empty else 0
                 change_pct = 0.0
 
             top_stocks_list.append({
@@ -44,40 +113,38 @@ def get_top_stocks():
                 "change_pct": change_pct,
             })
         except Exception as e:
-            top_stocks_list.append({
-                "name": name,
-                "ticker": ticker,
-                "price": 0,
-                "change_pct": 0.0,
-            })
-            # yfinance 에러는 너무 자주 발생하므로 콘솔에만 출력
+            top_stocks_list.append({"name": name, "ticker": ticker, "price": 0, "change_pct": 0.0})
             print(f"Warning: Failed to load real-time data for {name} ({ticker}). Error: {e}")
             
     return top_stocks_list
 
 def select_stock(name, ticker):
-    # 입력창에는 '종목명 [티커]' 형식으로 입력되도록 설정
+    """인기 종목 클릭 시 세션 상태를 업데이트합니다."""
+    # 💡 종목명과 티커를 함께 저장하여 검색 기능을 강화합니다.
     input_value = f"{name} [{ticker}]"
     st.session_state.input_temp = input_value
+    st.session_state.company_name = name 
     
-    # company_name을 업데이트하여 데이터 로딩 로직을 즉시 트리거합니다.
-    st.session_state.company_name = name # 순수 종목 이름만 저장
-    
-    # 나머지 세션 상태 초기화 (검색 시 새 작업을 위해)
+    # 새 검색 시 예측 관련 세션 상태 초기화
     st.session_state.df = pd.DataFrame()
     st.session_state.symbol = None
     st.session_state.model_trained = False
-    st.session_state.pred_price = None
-    st.session_state.change_pct = None
+    st.session_state.pred_df = pd.DataFrame() # 30일 예측 df 초기화
+    st.session_state.final_price = None
+    st.session_state.interpretation = None
+
 
 # =========================================================================
+# 💡 세션 초기화 및 입력 처리
+# =========================================================================
 
-# 세션 초기화
-for key in ['company_name', 'df', 'symbol', 'model_trained', 'pred_price', 'change_pct', 'time_steps', 'input_temp', 'model_symbol', 'model_time_steps']:
+# 세션 상태에 필요한 모든 키 초기화
+for key in ['company_name', 'df', 'symbol', 'model_trained', 'time_steps', 'input_temp', 
+            'model_symbol', 'model_time_steps', 'pred_df', 'final_price', 'interpretation']:
     if key not in st.session_state:
-        if key in ['company_name', 'input_temp']:
+        if key in ['company_name', 'input_temp', 'interpretation']:
             st.session_state[key] = ""
-        elif key == 'df':
+        elif key in ['df', 'pred_df']:
             st.session_state[key] = pd.DataFrame()
         elif key == 'model_trained':
             st.session_state[key] = False
@@ -86,6 +153,7 @@ for key in ['company_name', 'df', 'symbol', 'model_trained', 'pred_price', 'chan
 
 # 입력창 + Enter 처리 함수 (종목명 저장 기능)
 def submit():
+    """검색창 입력 시 실행되는 함수 (Enter 키 또는 클릭)"""
     user_input = st.session_state.input_temp.strip()
     
     # 입력된 값에서 티커가 포함되어 있을 경우 종목명만 추출합니다.
@@ -99,7 +167,9 @@ def submit():
         st.session_state.df = pd.DataFrame()
         st.session_state.symbol = None
         st.session_state.model_trained = False
-        st.session_state.pred_price = None
+        st.session_state.pred_df = pd.DataFrame() 
+        st.session_state.final_price = None
+
 
 # -------------------------------------------------------------------------
 # [UI] 2개의 컬럼으로 분할: 인기 종목 (1) | 검색 + 결과 (2)
@@ -122,16 +192,15 @@ with col_top:
             change_display = "---"
 
         label = (
-            f"**{i+1}. {stock['name']}**" 
+            f"**{i+1}. {stock['name']}**"
             f" ({price_display} | {change_display})"
         )
-        # 💡 경고 해결: use_container_width=True 대신 width='stretch' 사용
         st.button(
-            label, 
-            key=f"stock_{i}", 
-            on_click=select_stock, 
+            label,
+            key=f"stock_{i}",
+            on_click=select_stock,
             args=(stock['name'], stock['ticker']),
-            width='stretch' 
+            width='stretch'
         )
 
 # 2. 검색창 및 결과 표시
@@ -145,25 +214,30 @@ with col_main:
         label_visibility="collapsed"
     )
 
+# =========================================================================
+# 💡 데이터 로딩 및 결과 표시 로직
+# =========================================================================
 
-# 데이터 로딩 및 결과 표시 
-if st.session_state.company_name and st.session_state.df.empty:
+# 데이터 로딩
+# 💡 NameError 해결: HAS_MODEL_FILES가 정의됨
+if st.session_state.company_name and st.session_state.df.empty and HAS_MODEL_FILES:
     with st.spinner(f"'{st.session_state.company_name}' 데이터 로딩 중..."):
-        from data_loader import load_stock_data
         try:
+            # data_loader.py의 load_stock_data 함수는 종목 이름으로 티커를 찾고 데이터를 반환해야 함
             df, symbol = load_stock_data(st.session_state.company_name)
         except Exception as e:
             st.error(f"데이터 로딩 중 오류 발생: {e}")
-            st.stop()
+            # st.stop() # Canvas 환경에서는 st.stop() 대신 오류를 표시하고 계속 진행하는 것이 좋습니다.
             
-    # 데이터 유효성 검사 (최소 60일 필요)
-    if df.empty or len(df) < 60:
-        st.error("데이터 부족 또는 주식 없음")
-        st.session_state.company_name = "" 
-        st.stop()
-        
-    st.session_state.df = df
-    st.session_state.symbol = symbol
+        # 데이터 유효성 검사 (최소 60일 필요)
+        if df.empty or len(df) < 60:
+            st.error("데이터 부족 또는 주식 없음. 다른 종목을 검색해 주세요.")
+            st.session_state.company_name = ""
+            st.session_state.input_temp = ""
+            # st.stop() # Canvas 환경에서는 st.stop() 대신 오류를 표시하고 계속 진행하는 것이 좋습니다.
+        else:
+            st.session_state.df = df
+            st.session_state.symbol = symbol
 
 # UI (주가 추이 및 예측 결과 표시)
 if not st.session_state.df.empty:
@@ -175,71 +249,78 @@ if not st.session_state.df.empty:
 
     with col1:
         st.success(f"**{company}** ({symbol})")
-        st.dataframe(df.tail(5).style.format({"Close": "{:,.0f}원"}), width='stretch') # 💡 경고 해결
+        st.dataframe(df.tail(5).style.format({"Close": "{:,.0f}원"}), width='stretch')
 
-        # time_steps 선택
-        time_steps = st.selectbox("과거 데이터", [30, 60, 90], index=1, key="ts_select")
+        # Time Steps 선택 (필수 입력)
+        time_steps = st.selectbox("과거 데이터 (Time Steps)", [30, 60, 90], index=1, key="ts_select", help="LSTM 모델이 학습에 사용할 과거 데이터 기간을 선택하세요.")
         st.session_state.time_steps = time_steps
 
-        # 학습 버튼
-        # 💡 로직 변경: 버튼 클릭 시 학습 -> 예측까지 한번에 진행
-        if st.button("LSTM 학습 시작", width='stretch'): # 💡 경고 해결
-            from lstm_model import train_lstm_model
-            from predict import predict_next_month
-            
-            with st.spinner("모델 학습 및 예측 중... (20~40초 소요)"):
-                # 1. 학습 및 모델/스케일러 저장 (lstm_model.py)
-                train_lstm_model(df, symbol, time_steps)
-            
-                # 2. 학습된 모델과 스케일러를 사용하여 예측 (predict.py)
-                pred_price, change_pct = predict_next_month(df, symbol, time_steps)
+        # 학습 및 예측 버튼
+        if HAS_MODEL_FILES and st.button("LSTM 학습 및 30일 예측 시작", width='stretch', disabled=(not HAS_MODEL_FILES)):
+            with st.spinner("모델 학습 및 예측, AI 분석 리포트 생성 중... (20~40초 소요)"):
+                try:
+                    # 1. 학습 및 모델/스케일러 저장 (lstm_model.py)
+                    train_lstm_model(df, symbol, time_steps)
+                    
+                    # 2. 학습된 모델과 스케일러를 사용하여 예측 (predict.py)
+                    pred_df, final_price, interpretation = predict_next_month(df, symbol, time_steps, company)
+                    
+                    # 3. 예측 결과 세션 상태에 저장
+                    if pred_df is not None and not pred_df.empty:
+                        st.session_state.pred_df = pred_df # 30일 예측 df 저장
+                        st.session_state.final_price = final_price # 최종 가격
+                        st.session_state.interpretation = interpretation # LLM 해석
+                        st.session_state.model_trained = True
+                        
+                        st.session_state.model_symbol = symbol
+                        st.session_state.model_time_steps = time_steps
+                        
+                    else:
+                         st.error(f"예측 결과 생성에 실패했습니다. {interpretation}")
+
+                except Exception as e:
+                    st.error(f"모델 학습/예측 중 치명적인 오류 발생: {e}")
+                    st.session_state.model_trained = False
                 
-                # 3. 예측 결과 세션 상태에 저장
-                if pred_price:
-                    st.session_state.pred_price = pred_price
-                    st.session_state.change_pct = change_pct
-                    st.session_state.model_trained = True
-                
-                # 학습한 time_steps와 symbol을 저장하여 나중에 예측된 결과가 
-                # 현재 선택된 time_steps와 일치하는지 확인하는 용도로 사용
-                st.session_state.model_symbol = symbol 
-                st.session_state.model_time_steps = time_steps 
-            
             st.rerun() # UI 갱신
 
+        elif not HAS_MODEL_FILES:
+            st.error("학습/예측 파일이 없어 버튼이 비활성화되었습니다.")
+
+
     with col2:
-        st.subheader("주가 추이")
+        st.subheader(f"최근 주가 추이 ({symbol})")
         st.line_chart(df['Close'])
 
         # 예측 결과 표시
-        # 모델이 학습되었고, 현재 종목/time_steps와 일치할 때만 표시
         current_ts = st.session_state.get('ts_select') or 60
-        if (st.session_state.model_trained and 
-            st.session_state.pred_price is not None and 
-            st.session_state.model_symbol == symbol and 
+        if (st.session_state.model_trained and
+            not st.session_state.pred_df.empty and
+            st.session_state.model_symbol == symbol and
             st.session_state.model_time_steps == current_ts):
 
-            pred_price = st.session_state.pred_price
-            change_pct = st.session_state.change_pct
+            pred_df = st.session_state.pred_df
+            final_price = st.session_state.final_price
+            interpretation = st.session_state.interpretation
+            
+            # 최종 변동률 계산
+            current_price = df['Close'].iloc[-1]
+            change_pct = ((final_price - current_price) / current_price) * 100
 
+            st.markdown("---")
+            st.subheader(f"✅ 30일 예측 결과 및 AI 분석")
+
+            # 메트릭 카드
             col_a, col_b = st.columns(2)
-            col_a.metric("현재 가격", f"{df['Close'].iloc[-1]:,.0f}원")
-            col_b.metric("1개월 예측", f"{pred_price:,.0f}원", f"{change_pct:+.1f}%")
+            col_a.metric("현재 가격", f"{current_price:,.0f}원")
+            col_b.metric("30일 후 예측 가격", f"{final_price:,.0f}원", f"{change_pct:+.1f}%")
 
-            # Plotly 그래프 표시 로직 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='실제 주가', line=dict(color='blue')))
+            # 30일 예측 차트 시각화
+            visualize_prediction(df, pred_df, symbol)
             
-            # 예측 포인트 추가
-            future_date = df.index[-1] + pd.DateOffset(months=1)
-            fig.add_trace(go.Scatter(x=[df.index[-1], future_date],
-                                     y=[df['Close'].iloc[-1], pred_price],
-                                     mode='lines+markers', 
-                                     name='1개월 예측', 
-                                     line=dict(dash='dot', color='red')))
-            
-            fig.update_layout(title=f"{company} | {current_ts}일 기반 예측", height=500)
-            st.plotly_chart(fig, use_container_width=True) # use_container_width는 plotly 함수에 남겨둡니다.
+            # LLM 해석 리포트
+            st.subheader("💡 Gemini AI 분석 리포트")
+            st.info(interpretation)
 
 else:
-    st.info("왼쪽 **'인기 종목'**을 클릭하거나, 검색창에 이름을 입력하세요.")
+    st.info("왼쪽 '인기 종목'을 클릭하거나, 검색창에 주식 이름을 입력하세요.")
