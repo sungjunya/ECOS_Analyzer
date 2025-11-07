@@ -1,193 +1,225 @@
 import numpy as np
 import pandas as pd
-from tensorflow.keras.models import load_model # keras에서 tensorflow.keras로 변경하여 호환성 강화
+from tensorflow.keras.models import load_model 
 import joblib 
 import os
 import requests 
 import json
 import time 
-from datetime import timedelta
-from dotenv import load_dotenv
-load_dotenv() 
+from datetime import datetime, timedelta
+import streamlit as st 
+
 # ── 설정 ──
-MODEL_DIR = "models" # 모델 저장 폴더
+MODEL_DIR = "models" 
+# API 키는 os.getenv('__api_key')를 통해 app.py에서 로드된 .env 값을 가져옵니다.
+API_MODEL_NAME = "gemini-2.5-flash-preview-09-2025" 
 
-# API 호출 시 재시도 관련 설정
-API_MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
+def add_technical_indicators(df):
+    """
+    LSTM 학습에 사용된 7가지 기술적 지표를 계산합니다.
+    (SMA_5, SMA_20, RSI, MACD, Volume_SMA)
+    """
+    df = df.copy()
+    
+    # 1. 이동 평균선 (SMA)
+    df['SMA_5'] = df['Close'].rolling(5).mean()
+    df['SMA_20'] = df['Close'].rolling(20).mean()
+    
+    # 2. RSI (Relative Strength Index)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    # 0으로 나누기 방지
+    rs = gain / loss.replace(0, 1e-6) 
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD (Moving Average Convergence Divergence)
+    # adjust=False는 Pandas의 EWM 기본 동작입니다.
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    
+    # 4. 거래량 이동 평균
+    df['Volume_SMA'] = df['Volume'].rolling(20).mean()
+    
+    return df.dropna()
 
-def _generate_interpretation(company, df_actual, df_pred):
+def _generate_mock_interpretation(company, final_predicted_price, change_pct):
+    """API 호출 실패 시 사용자에게 보여줄 가상 해석을 생성합니다."""
+    trend = "상승 추세" if change_pct > 0 else "하락 추세" if change_pct < 0 else "보합세"
+    
+    return (
+        f"**[🚨 네트워크/API 오류로 인한 가상 분석 리포트]**\n\n"
+        f"현재 {company} 종목에 대한 Gemini AI 연결에 실패하였습니다. "
+        f"이는 API 권한 또는 할당량 문제로 보입니다. 이 리포트는 **API 연결이 복구된 후** "
+        f"정상적으로 표시됩니다.\n\n"
+        f"**LSTM 모델 단순 예측 결과:** 향후 30일간 {trend}가 예상됩니다. "
+        f"30일 후 예측 종가는 약 **{final_predicted_price:,.0f} KRW**이며, 이는 현재가 대비 "
+        f"**{change_pct:+.1f}%**의 변동률을 시사합니다."
+    )
+
+def _generate_interpretation(company, current_price, final_predicted_price, change_pct, rsi, volume_trend, df_pred):
     """
     Gemini API를 호출하여 LSTM 예측 결과에 대한 전문적인 해석을 생성합니다.
+    df_pred는 'Close' 컬럼을 가져야 합니다.
     """
     
-    # 1. API 키를 가져옵니다. (GEMINI_API_KEY 또는 __api_key 환경 변수 확인)
-    # app.py에서 설정한 GEMINI_API_KEY를 우선 확인합니다.
-    API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
+    # API 키를 환경 변수에서 직접 가져와 유효성 검사 및 URL에 명시적으로 사용
+    API_KEY = os.getenv('__api_key', '').strip()
     
-    # 만약 GEMINI_API_KEY가 없으면, 특정 환경 변수인 __api_key도 확인합니다.
+    # 키가 유효하지 않으면 Mock 데이터 반환
     if not API_KEY:
-        API_KEY = os.getenv('__api_key', '').strip()
-
-    # 2. 키가 유효한지 확인합니다.
-    if not API_KEY or API_KEY == 'YOUR_ACTUAL_GEMINI_API_KEY':
-        print("경고: Gemini API 키가 올바르게 설정되지 않았습니다. LLM 분석을 건너뜁니다.")
-        return (
-            "🔴 LLM 해석 실패: API 키가 설정되지 않았거나 유효하지 않습니다. "
-            "`app.py` 파일 상단에서 **유효한 키**로 교체하고 저장했는지 확인해 주세요."
-        )
-
-    # 예측된 30일 데이터 추이를 분석합니다.
-    start_price = df_actual['Close'].iloc[-1]
-    final_price = df_pred['Close'].iloc[-1]
+        print("CRITICAL: API Key not found (__api_key is empty). Falling back to Mock analysis.")
+        return _generate_mock_interpretation(company, final_predicted_price, change_pct)
+        
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{API_MODEL_NAME}:generateContent"
+        f"?key={API_KEY}"
+    )
     
-    # 10일 단위로 변동률 계산 (추이 분석을 위함)
-    segments = [10, 20, 30]
-    trend_analysis = []
-    
-    for i, day in enumerate(segments):
-        if day <= len(df_pred):
-            end_price = df_pred['Close'].iloc[day-1]
-            
-            if i == 0:
-                base_price = start_price
-                period_name = "초기 10일 (현재 종가 대비)"
-            elif i == 1:
-                base_price = df_pred['Close'].iloc[9] 
-                period_name = "중기 10일 (10일차 종가 대비)"
-            else: # day == 30
-                base_price = df_pred['Close'].iloc[19] 
-                period_name = "후기 10일 (20일차 종가 대비)"
-            
-            # 이전 시점 대비 변동률
-            change = (end_price - base_price) / base_price * 100
-            
-            trend_analysis.append({
-                "period": period_name,
-                "price": f"{end_price:,.0f} KRW",
-                "change_pct": f"{change:+.2f}%"
-            })
-
-    total_change = (final_price - start_price) / start_price * 100
-    
+    # 🚨 [수정]: df_pred가 'Close' 컬럼을 가지므로, '종가' 대신 'Close'를 사용합니다.
+    # LLM 분석을 위해 예측 추이 변동성을 계산합니다.
     analysis_data = {
-        "company": company,
-        "current_price": f"{start_price:,.0f} KRW",
-        "final_predicted_price": f"{final_price:,.0f} KRW",
-        "total_change_pct": f"{total_change:+.2f}%",
-        "trend_segments": trend_analysis,
+        "종목": company,
+        "현재가": f"{current_price:,.0f} KRW",
+        "30일 후 예측가": f"{final_predicted_price:,.0f} KRW",
+        "예상 등락률": f"{change_pct:+.1f}%",
+        "RSI": f"{rsi:.1f}",
+        "거래량 추세": volume_trend,
+        "10일 가격 변동성 (초기, 중기, 후기)": {
+            "초기 10일 변동 (%)": (df_pred['Close'].iloc[9] - current_price) / current_price * 100,
+            "중기 10일 변동 (%)": (df_pred['Close'].iloc[19] - df_pred['Close'].iloc[9]) / df_pred['Close'].iloc[9] * 100,
+            "후기 10일 변동 (%)": (df_pred['Close'].iloc[29] - df_pred['Close'].iloc[19]) / df_pred['Close'].iloc[19] * 100,
+        }
     }
-
+    
     system_prompt = (
-        "당신은 LSTM 주가 예측 모델의 결과를 분석하는 전문 기술 분석가입니다. "
-        "주어진 10일 단위의 가격 변화(momentum) 데이터를 기반으로, "
-        "향후 30일간의 주가 '흐름'과 '변동성'에 초점을 맞춘 심층적인 분석 리포트를 작성해야 합니다. "
-        "분석에는 왜 이러한 추세가 예측되었는지에 대한 기술적 해석(예: 조정, 돌파 시도, 횡보 패턴)을 포함하고, "
-        "예상되는 주가 궤적을 명확히 설명해 주세요. 보고서는 객관적이고 간결한 한 단락의 한국어(하십시오체)여야 합니다."
+        "당신은 인공지능 기반의 금융 기술 분석가입니다. "
+        "주어진 LSTM 예측 결과와 핵심 기술 지표를 바탕으로, "
+        "시장의 변동성, 추세의 강도, 그리고 예상되는 주가 궤적에 초점을 맞춘 "
+        "객관적이고 간결한 한국어(하십시오체) 전문가 리포트를 **5줄 이상**으로 작성해야 합니다. "
+        "절대로 '투자 조언', '매수', '매도', '추천' 등의 단어를 사용해서는 안 됩니다."
     )
     
     user_query = (
-        f"LSTM 모델이 예측한 '{company}'의 향후 30일 주가 추이 데이터입니다. 이 데이터를 "
-        f"분석하여 예측 결과에 대한 전문적인 해석 리포트를 작성해 주세요. "
+        f"LSTM 모델이 예측한 '{company}'의 향후 30일 주가 추이 및 기술적 지표 분석 데이터입니다. "
+        f"이 데이터를 분석하여 전문적인 해석 리포트를 작성해 주세요. "
         f"분석 데이터: {json.dumps(analysis_data, ensure_ascii=False)}"
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{API_MODEL_NAME}:generateContent?key={API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": user_query}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "tools": [{"google_search": {}}], 
     }
     
     # API 호출 (지수 백오프 적용)
-    for attempt in range(5):
+    max_retries = 5
+    for attempt in range(max_retries):
         try:
-            response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload))
+            response = requests.post(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload), timeout=30)
             response.raise_for_status() 
             result = response.json()
             
+            # 응답 텍스트 추출
             text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '해석을 생성하는 데 실패했습니다.')
             return text
             
         except requests.exceptions.RequestException as e:
-            if attempt < 4:
+            if response.status_code == 403:
+                 print(f"CRITICAL 403 ERROR: API Key or Quota issue suspected. URL check: {url}")
+            
+            if attempt < max_retries - 1:
                 wait_time = 2 ** attempt
-                print(f"API 요청 실패: {e}. {wait_time}초 후 재시도합니다.")
+                print(f"[{attempt + 1}/{max_retries}] API 요청 실패: {e}. {wait_time}초 후 재시도합니다.") 
                 time.sleep(wait_time)
             else:
-                print(f"최종 API 요청 실패: {e}")
-                return "네트워크 오류 또는 API 호출 한도 초과로 인해 예측 해석을 불러올 수 없습니다."
+                error_msg = "네트워크 오류 또는 API 호출 한도 초과로 인해 예측 해석을 불러올 수 없습니다."
+                print(f"최종 실패: {error_msg}")
+                return _generate_mock_interpretation(company, final_predicted_price, change_pct)
         except Exception as e:
             print(f"응답 처리 중 오류 발생: {e}")
             return "예측 결과를 해석하는 중 내부 오류가 발생했습니다."
-    return "예측 해석 생성 실패 (최대 재시도 횟수 초과)."
+            
+    return _generate_mock_interpretation(company, final_predicted_price, change_pct)
 
 
 def predict_next_month(df, symbol, time_steps, company): 
-    """저장된 모델과 스케일러를 사용하여 다음 30일 주가를 예측하고 LLM 해석을 반환합니다."""
+    """저장된 다변량 모델을 사용하여 다음 30일 주가를 예측하고 LLM 해석을 반환합니다."""
     
-    # .을 _로 치환하여 파일 경로 안전하게 만듦
-    safe_symbol = symbol.replace(".", "_")
-    
-    # MODEL_DIR을 models로 변경했으므로, 학습 파일 경로도 확인 필요
-    model_path = os.path.join(MODEL_DIR, f"lstm_model_{safe_symbol}_{time_steps}.keras")
-    scaler_path = os.path.join(MODEL_DIR, f"scaler_{safe_symbol}_{time_steps}.pkl")
+    safe = symbol.replace(".", "_")
+    scaler_path = os.path.join(MODEL_DIR, f"scaler_{safe}_{time_steps}.pkl")
+    model_path = os.path.join(MODEL_DIR, f"model_{safe}_{time_steps}.keras") 
 
-    if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-        print(f"Model or scaler file not found. Please train the model first.")
-        # 사용자 피드백을 위해 모델 폴더 이름을 정확히 알려줍니다.
-        return pd.DataFrame(), None, f"모델 파일이 없어 예측을 수행할 수 없습니다. 모델 폴더가 '{MODEL_DIR}'인지 확인하세요."
-    
+    if not os.path.exists(scaler_path) or not os.path.exists(model_path):
+        return None, None, f"'{company}' 모델이 없습니다. 'LSTM 학습 및 30일 예측 시작' 버튼으로 자동 학습하세요."
+
     try:
         scaler = joblib.load(scaler_path)
-        # keras.models.load_model 대신 tensorflow.keras.models.load_model 사용
-        model = load_model(model_path) 
-        
+        model = load_model(model_path)
     except Exception as e:
-        print(f"Error loading model or scaler: {e}")
-        return pd.DataFrame(), None, f"모델/스케일러 로드 오류: {e}"
+        return None, None, f"모델 로드 실패 ({e}). 재학습 후 재시도하세요."
 
-    # 'Close' 가격만 사용
-    data = df.filter(['Close'])
+    # 1. 예측에 필요한 기술적 지표 추가
+    df_proc = add_technical_indicators(df.copy())
+    features = ['Close', 'Volume', 'SMA_5', 'SMA_20', 'RSI', 'MACD', 'Volume_SMA']
     
-    # ── 30일 예측을 위한 반복 루프 ──
-    last_data = data[-time_steps:].values
-    last_data_scaled = scaler.transform(last_data)
+    if len(df_proc) < time_steps:
+        return None, None, "기술 지표 생성 후 과거 데이터 부족 (time_steps보다 짧음)"
+
+    # 2. 스케일링 및 최근 데이터 준비
+    data_scaled = scaler.transform(df_proc[features].values) 
+    recent = data_scaled[-time_steps:] # (time_steps, 7)
     
-    temp_input = last_data_scaled.flatten().tolist()
-    
-    lst_output = []
-    n_future_days = 30
-    
-    for i in range(n_future_days):
-        if len(temp_input) > time_steps:
-            # 여기는 항상 time_steps와 길이가 같거나 작아야 합니다.
-            # 예측 루프의 기본 로직을 유지합니다.
-            x_input = np.array(temp_input[-time_steps:]).reshape((1, time_steps, 1))
-        else:
-            x_input = np.array(temp_input).reshape((1, time_steps, 1))
-            
-        y_pred_scaled = model.predict(x_input, verbose=0)
+    # 3. 예측 루프 (안정화된 로직 적용)
+    predictions = []
+    current_input = recent.reshape(1, time_steps, len(features)) # (1, time_steps, 7)
+
+    for _ in range(30):
+        # 예측 수행
+        predicted_scaled_price = model.predict(current_input, verbose=0)[0, 0]
+        predictions.append(predicted_scaled_price)
         
-        lst_output.append(y_pred_scaled[0, 0])
-        temp_input.append(y_pred_scaled[0, 0])
-        temp_input = temp_input[1:] 
+        # 다음 단계의 입력 시퀀스 준비
+        # 1. 마지막 시퀀스(time_steps - 1)의 모든 피처를 복사
+        temp_scaled = current_input[0, -1].copy()
+        
+        # 2. Close 값(인덱스 0)을 예측된 값으로 업데이트
+        temp_scaled[0] = predicted_scaled_price
 
-    # ── 예측 결과를 원래 스케일로 역변환 및 DataFrame 생성 ──
-    scaled_predictions_2d = np.array(lst_output).reshape(-1, 1)
-    
-    # 역변환을 위한 더 안전한 방식 사용
-    # 스케일러가 fit된 feature의 개수와 일치하도록 더미 데이터 생성
-    dummy_input = np.zeros((len(scaled_predictions_2d), scaler.n_features_in_))
-    dummy_input[:, 0] = scaled_predictions_2d.flatten()
-    
-    predictions = scaler.inverse_transform(dummy_input)[:, 0]
+        # 3. 새로운 시퀀스 생성 (첫 번째 요소를 제거하고 마지막에 새 요소를 추가)
+        new_scaled_sequence = np.append(current_input[0, 1:], [temp_scaled], axis=0)
+        current_input = new_scaled_sequence.reshape(1, time_steps, len(features))
 
+    # 4. 역변환
+    dummy = np.zeros((30, len(features)))
+    dummy[:, 0] = predictions # 예측된 종가만 첫 번째 컬럼에 채움
+    pred_prices = scaler.inverse_transform(dummy)[:, 0]
+
+    # 5. 결과 DataFrame 생성
     last_date = df.index[-1]
-    prediction_dates = [last_date + timedelta(days=i) for i in range(1, n_future_days + 1)]
+    dates = [last_date + timedelta(days=i+1) for i in range(30)]
+    # 🚨 [수정]: 컬럼명을 '종가' 대신 'Close'로 사용
+    pred_df = pd.DataFrame({'Close': pred_prices}, index=dates)
     
-    pred_df = pd.DataFrame(predictions, index=prediction_dates, columns=['Close'])
-    final_price = pred_df['Close'].iloc[-1]
+    # 6. LLM 분석을 위한 통계량 계산
+    final_price = float(pred_prices[-1])
+    current_price = float(df['Close'].iloc[-1])
+    change_pct = (final_price - current_price) / current_price * 100 if current_price != 0 else 0
     
-    # ── LLM 해석 생성 ──
-    interpretation = _generate_interpretation(company, df, pred_df)
+    # RSI와 거래량 추세는 지표가 추가된 df_proc에서 가져옴
+    rsi = df_proc['RSI'].iloc[-1]
+    volume_trend = "증가" if df['Volume'].iloc[-1] > df['Volume'].mean() else "감소"
+    
+    # 7. LLM 해석 생성
+    interpretation = _generate_interpretation(
+        company=company,
+        current_price=current_price,
+        final_predicted_price=final_price,
+        change_pct=change_pct,
+        rsi=rsi,
+        volume_trend=volume_trend,
+        df_pred=pred_df # 'Close' 컬럼을 가진 df_pred 전달
+    )
     
     return pred_df, final_price, interpretation
