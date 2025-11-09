@@ -1,301 +1,311 @@
-// 📈 realEstateAnalyzer.js (전체 코드)
+// ====================================================================
+// 📈 realEstateAnalyzer.js — ECOS 기반 한국 부동산 5단계 위험도 분석기 (최종 안정형)
+// - "중립" 제거: 반드시 5단계 중 하나만 반환 (최대 위험 / 긴축 경계 / 침체 탈출 / 확장 초기 / 침체기)
+// - 1y/3y/5y별 가중 평균 반영(avgWeighted)
+// - Gemini AI 해설 + 투자 전략 JSON 출력
+// - server.js와 완벽 호환(module.exports 구조 통일)
+// ====================================================================
+
+"use strict";
+
 const axios = require("axios");
 
-// [1] ✅ Gemini API 호출을 위한 환경 변수와 URL 설정
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''; // 환경 변수에서 API 키 로드
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
+// --------------------------------------------------------------------
+// [1] 환경 변수 및 상수
+// --------------------------------------------------------------------
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_API_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
+const ECOS_API_KEY = process.env.ECOS_API_KEY || "";
 
-// [2] ✅ Gemini AI를 호출하여 구조화된 JSON 응답을 생성하는 함수 (핵심 변경)
-// type: 'realestate'에 맞춰 시스템 지침을 설정하고, 결과는 **분석과 추천이 분리된 JSON**으로 반환합니다.
-async function generateAIContent(prompt) {
-    if (!GEMINI_API_KEY) {
-        console.warn("⚠️ GEMINI_API_KEY가 설정되지 않았습니다. AI 분석을 건너뜕니다.");
-        // [수정] AI 분석 실패 시 기본 JSON 구조를 반환하여 undefined 오류 방지
-        return {
-            analysis: "⚠️ AI 분석 키가 설정되지 않아 심층 분석을 사용할 수 없습니다.",
-            recommendation_summary: "API 키를 설정하여 분석을 활성화하십시오."
-        };
-    }
-
-    // 시스템 지침: 부동산 전문 컨설턴트 역할 부여
-    const systemInstruction = "당신은 한국 부동산 시장의 동향을 심층 분석하는 전문 투자 컨설턴트입니다. 당신의 임무는 주어진 데이터를 기반으로 시장 상황에 대한 상세 분석과 함께, 이에 따른 가장 적절한 투자 전략(매수/관망/매도)을 한 문장으로 명확하게 요약하여 JSON 형식으로 제공하는 것입니다. 분석 결과는 항상 한국어로 작성해야 합니다.";
-
-    // [변경] JSON 스키마 정의: 분석(긴 문단)과 추천(한 줄)을 분리
-    const responseSchema = {
-        type: "OBJECT",
-        properties: {
-            "analysis": { "type": "STRING", "description": "현재 부동산 시장 상황에 대한 상세 분석 및 해설을 한 문단으로 작성합니다. 불필요한 서론/결론, 제목, 불릿 포인트를 사용하지 마십시오. 답변을 할 때 항상 주어진 위험 등급(Level)과 구체적인 지표 값을 인용하여 분석을 시작해야 합니다." },
-            "recommendation_summary": { "type": "STRING", "description": "현재 상황에 기반한 가장 적합한 투자 전략(매수/관망/매도)을 담은 짧고 간결한 한 문장으로 작성합니다. '매수', '관망', '매도' 중 하나를 포함해야 합니다." }
-        },
-        propertyOrdering: ["analysis", "recommendation_summary"]
-    };
-
-    const payload = {
-        contents: [{ parts: [{ text: prompt }] }],
-        systemInstruction: {
-            parts: [{ text: systemInstruction }]
-        },
-        generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: responseSchema
-        }
-    };
-
-    try {
-        const response = await axios.post(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 15000
-        });
-
-        const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (text) {
-            try {
-                // JSON 문자열을 객체로 파싱
-                const parsed = JSON.parse(text);
-                return {
-                    analysis: parsed.analysis || "AI 분석 결과가 누락되었습니다.",
-                    recommendation_summary: parsed.recommendation_summary || "투자 전략 요약이 누락되었습니다."
-                };
-            } catch (e) {
-                console.error("🚨 JSON 파싱 오류:", e);
-                return {
-                    analysis: `AI 분석 실패: 응답 형식이 올바르지 않습니다. 원본 텍스트: ${text.substring(0, 100)}...`,
-                    recommendation_summary: "분석 실패"
-                };
-            }
-        } else {
-            console.error("🚨 Gemini API 응답에서 유효한 텍스트를 찾을 수 없습니다.");
-            return { analysis: "AI 분석 실패: 유효한 응답 없음", recommendation_summary: "분석 실패" };
-        }
-
-    } catch (error) {
-        console.error("🚨 Gemini API 호출 중 오류 발생:", error.message);
-        return {
-            analysis: `AI 분석 실패: 통신 오류 (${error.message.substring(0, 50)}...)`,
-            recommendation_summary: "통신 오류"
-        };
-    }
-}
-
-
-// 날짜 생성
 function getTodayYYYYMM() {
-    const d = new Date();
-    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 const today = getTodayYYYYMM();
 
-// ECOS API 기본 설정 (기존 유지)
+// --------------------------------------------------------------------
+// [2] ECOS API 설정
+// --------------------------------------------------------------------
 const API_CONFIG = {
-    KEY: process.env.ECOS_API_KEY,
-    BASE_URL: "https://ecos.bok.or.kr/api/StatisticSearch",
-    LANG: "kr",
-    TYPE: "json",
-    P_START: 1,
-    P_END: 1000,
-    CYCLE: "M",
-    START_DATE: "201001",
-    END_DATE: today,
+  KEY: ECOS_API_KEY,
+  BASE_URL: "https://ecos.bok.or.kr/api/StatisticSearch",
+  LANG: "kr",
+  TYPE: "json",
+  P_START: 1,
+  P_END: 1000,
+  CYCLE: "M",
+  START_DATE: "201001",
+  END_DATE: today,
 };
 
-// ---------- 유틸리티 함수 (기존 유지) ----------
-function avg(arr) {
-    if (!arr.length) return 0;
-    return arr.reduce((a, b) => a + b.value, 0) / arr.length;
-}
-
-async function fetchIndicatorData(statCode, itemCode = "", cycle = API_CONFIG.CYCLE) {
-
-    let itemPath = "";
-    if (Array.isArray(itemCode)) {
-        itemPath = "/" + itemCode.join("/");
-    } else if (typeof itemCode === "string" && itemCode.trim() !== "") {
-        itemPath = `/${itemCode}`;
-    }
-
-    const url = `${API_CONFIG.BASE_URL}/${API_CONFIG.KEY}/${API_CONFIG.TYPE}/${API_CONFIG.LANG}/${API_CONFIG.P_START}/${API_CONFIG.P_END}/${statCode}/${cycle}/${API_CONFIG.START_DATE}/${API_CONFIG.END_DATE}${itemPath}`;
-
-    try {
-        const { data } = await axios.get(url, { timeout: 10000 });
-        if (data?.RESULT?.CODE && data.RESULT.CODE !== '000') {
-            console.error(`API 오류 (${statCode}, Item: ${itemCode}, Cycle: ${cycle}): ${data.RESULT.MESSAGE}`);
-            return [];
-        }
-        const rows = data?.StatisticSearch?.row || [];
-        return rows.map(r => ({
-            time: r.TIME,
-            value: parseFloat(r.DATA_VALUE)
-        })).filter(d => !isNaN(d.value));
-    } catch (e) {
-        console.error(`API 통신 오류 (${statCode}, Item: ${itemCode}, Cycle: ${cycle}):`, e.message);
-        return [];
-    }
+// --------------------------------------------------------------------
+// [3] 데이터 유틸 함수
+// --------------------------------------------------------------------
+function avgWeighted(arr) {
+  if (!arr || arr.length === 0) return 0;
+  let total = 0, weightSum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    const w = (i + 1) ** 2; // 최근 데이터에 더 큰 가중치
+    total += arr[i].value * w;
+    weightSum += w;
+  }
+  return total / weightSum;
 }
 
 function calculateYoY(data) {
-    const result = [];
-    const map = new Map(data.map(d => [d.time, d.value]));
-    data.forEach(d => {
-        const prev = `${parseInt(d.time.slice(0, 4)) - 1}${d.time.slice(4)}`;
-        if (map.has(prev)) {
-            const rate = ((d.value - map.get(prev)) / map.get(prev)) * 100;
-            result.push({ time: d.time, value: +rate.toFixed(2) });
-        }
-    });
-    return result;
+  const map = new Map(data.map(d => [d.time, d.value]));
+  const result = [];
+  data.forEach(d => {
+    const prev = `${parseInt(d.time.slice(0, 4)) - 1}${d.time.slice(4)}`;
+    if (map.has(prev) && map.get(prev) !== 0) {
+      const rate = ((d.value - map.get(prev)) / map.get(prev)) * 100;
+      result.push({ time: d.time, value: +rate.toFixed(2) });
+    }
+  });
+  return result;
 }
 
 function sliceYears(data, years) {
-    const cutoff = `${parseInt(today.slice(0, 4)) - years}${today.slice(4, 6)}`;
-    return data.filter(d => d.time >= cutoff);
+  const cutoff = `${parseInt(today.slice(0, 4)) - years}${today.slice(4, 6)}`;
+  return data.filter(d => d.time >= cutoff);
 }
 
-
-// ---------- 5단계 부동산 위험 등급 분류 함수 ----------
-function classifyRealEstateRisk(saleYoY, rentYoY, permitYoY, interestRate, m2YoY) {
-    let result = {
-        level: "중립 (Neutral)",
-        color: "gray",
-    };
-
-    // 핵심 조건 정의 (임계값 설정)
-    const isPriceFalling = saleYoY < -0.5 && rentYoY < 0;
-    const isPriceSurging = saleYoY > 1.0 && rentYoY > 0.5;
-    const isPermitHigh = permitYoY > 5.0;
-    const isRateHigh = interestRate >= 3.0;
-    const isM2Low = m2YoY < 2.0;
-    const isM2High = m2YoY > 5.0;
-
-    // 1. 🛑 최대 위험 (Red)
-    if (isPriceFalling && (isRateHigh || isPermitHigh)) {
-        result.level = "🛑 최대 위험 (Extreme Risk)";
-        result.color = "red";
-        return result;
-    }
-
-    // 2. ⚠️ 긴축 경계 (Orange)
-    if (isPriceSurging && isRateHigh) {
-        result.level = "⚠️ 긴축 경계 (Tightening Alert)";
-        result.color = "orange";
-        return result;
-    }
-
-    // 3. 🟡 침체 탈출 (Yellow)
-    if (saleYoY >= -0.5 && saleYoY < 1.0 && !isRateHigh && !isM2Low) {
-        result.level = "🟡 침체 탈출 (Recovery Signal)";
-        result.color = "yellow";
-        return result;
-    }
-
-    // 4. ✅ 확장 초기 (Light Green)
-    if (isPriceSurging && !isRateHigh && !isM2Low && !isM2High && !isPermitHigh) {
-        result.level = "✅ 확장 초기 (Early Expansion)";
-        result.color = "green";
-        return result;
-    }
-
-    // 5. 🟦 침체기 (Blue)
-    if (isPriceFalling && isM2Low && !isRateHigh) {
-        result.level = "🟦 침체기 (Contraction)";
-        result.color = "blue";
-        return result;
-    }
-
-    return result;
+function f2(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return "0.00";
+  return v.toFixed(2);
 }
 
+// --------------------------------------------------------------------
+// [4] ECOS fetch 함수
+// --------------------------------------------------------------------
+async function fetchIndicatorData(statCode, itemCode = "", cycle = "M") {
+  if (!API_CONFIG.KEY) {
+    console.warn("⚠️ ECOS_API_KEY가 설정되지 않았습니다.");
+    return [];
+  }
 
-// ---------- 메인 함수 (period 파라미터 사용) ----------
-async function getRealEstateSignal(period = "5y") {
-    const yearsMap = { "1y": 1, "3y": 3, "5y": 5 };
-    // 🚀 period 인자를 받아 years 변수에 사용
-    const years = yearsMap[period] || 5;
+  let itemPath = "";
+  if (Array.isArray(itemCode)) itemPath = "/" + itemCode.join("/");
+  else if (typeof itemCode === "string" && itemCode.trim() !== "")
+    itemPath = `/${itemCode}`;
 
+  const url = `${API_CONFIG.BASE_URL}/${API_CONFIG.KEY}/${API_CONFIG.TYPE}/${API_CONFIG.LANG}/${API_CONFIG.P_START}/${API_CONFIG.P_END}/${statCode}/${cycle}/${API_CONFIG.START_DATE}/${API_CONFIG.END_DATE}${itemPath}`;
+
+  try {
+    const { data } = await axios.get(url, { timeout: 15000 });
+    if (data?.RESULT?.CODE && data.RESULT.CODE !== "000") {
+      console.error(`🚨 ECOS 오류 [${statCode}]: ${data.RESULT.MESSAGE}`);
+      return [];
+    }
+    const rows = data?.StatisticSearch?.row || [];
+    return rows
+      .map(r => ({ time: r.TIME, value: parseFloat(r.DATA_VALUE) }))
+      .filter(d => !isNaN(d.value));
+  } catch (err) {
+    console.error(`🚨 ECOS 통신 오류 [${statCode}]`, err.message);
+    return [];
+  }
+}
+
+// --------------------------------------------------------------------
+// [5] 부동산 위험도 분류 (5단계 고정, 중립 없음)
+// --------------------------------------------------------------------
+const RISK_DESCRIPTIONS = {
+  red: "금리·공급 동시 상승, 급락 및 유동성 경색 위험.",
+  orange: "과열 국면의 단기 조정 가능성.",
+  yellow: "전세 상승, 매매 하락 둔화, 회복 초기.",
+  green: "매매 상승 전환, 거래 회복 구간.",
+  blue: "매매·전세 모두 하락세, 거래 위축.",
+};
+
+function classifyRealEstateRisk(saleYoY, rentYoY, permitYoY, baseRate, m2YoY) {
+    // 🔴 최대 위험: 금리 매우 높고(>3.4), 공급 증가, 유동성↓, 가격 약세
+    if (baseRate > 3.4 && permitYoY > 3 && m2YoY < 5 && saleYoY < 0 && rentYoY < 0)
+      return { level: "최대 위험", color: "red", description: "금리·공급 동시 상승, 급락 및 유동성 경색 위험." };
+  
+    // 🟧 긴축 경계: 금리 약 2.8~3.4%, 수요 회복 조짐, M2 높음
+    if (baseRate >= 2.8 && baseRate <= 3.4 && (saleYoY > 0.2 || rentYoY > 0.2) && m2YoY >= 6)
+      return { level: "긴축 경계", color: "orange", description: "과열 국면의 단기 조정 가능성." };
+  
+    // 🟨 침체 탈출: 금리 낮고(<3.2), 매매 하락 둔화(-1~+1.2), 전세≥0, M2≥6
+    if (baseRate < 3.2 && saleYoY > -1 && saleYoY < 1.2 && rentYoY >= 0 && m2YoY >= 6)
+      return { level: "침체 탈출", color: "yellow", description: "전세 상승, 매매 하락 둔화, 회복 초기." };
+  
+    // 🟩 확장 초기: 금리 낮고(<2.8), 매매·전세 동반 상승, M2↑↑
+    if (baseRate < 2.8 && saleYoY >= 0.7 && rentYoY >= 0.4 && m2YoY >= 7)
+      return { level: "확장 초기", color: "green", description: "매매 상승 전환, 거래 회복 구간." };
+  
+    // 🟦 침체기: 나머지 모든 경우
+    return { level: "침체기", color: "blue", description: "매매·전세 모두 하락세, 거래 위축." };
+  }
+  
+
+// --------------------------------------------------------------------
+// [6] Gemini AI 프롬프트 생성기
+// --------------------------------------------------------------------
+function buildAIPrompt({ yearsLabel, riskLevel, riskDesc, rate, saleYoY, rentYoY, permitYoY, m2YoY }) {
+    return `
+  너는 한국 부동산 시장을 분석하는 거시경제 전문가다.
+  아래 데이터를 기반으로, 한국 부동산의 현재 상태를 **8~12문장**으로 자세히 설명하고
+  개인 투자자가 참고할 전략을 **2~3문장**으로 요약하라.
+  출력은 반드시 **JSON 형식**으로 하고, 코드블록(\`\`\`)을 절대 사용하지 마라.
+  
+  형식:
+  {
+    "analysis": "현재 부동산 위험 등급: ${riskLevel}이며, ... (8~12문장)",
+    "recommendation_summary": "2~3문장, 개인 투자자 관점의 현실적 조언 ('매수', '관망', '매도' 중 하나 포함)"
+  }
+  
+  📊 데이터 요약 (${yearsLabel}):
+  - 위험도: ${riskLevel} (${riskDesc})
+  - 기준금리: ${f2(rate)}%
+  - 주택매매가격지수(YoY): ${f2(saleYoY)}%
+  - 주택전세가격지수(YoY): ${f2(rentYoY)}%
+  - 건축허가면적(YoY): ${f2(permitYoY)}%
+  - 광의통화량(M2 YoY): ${f2(m2YoY)}%
+  
+  작성 규칙:
+  - 'analysis'는 반드시 "현재 부동산 위험 등급: ${riskLevel}이며, ..."로 시작.
+  - 금리·전세·매매·공급(M2) 간 상호작용을 구체적으로 서술.
+  - 공급(허가YoY)이 낮으면 향후 공급 부족 → 가격상승 위험을 연결.
+  - M2가 높을수록 유동성 유입 가능성을 설명.
+  - 전략에는 '매수', '관망', 또는 '매도' 중 하나를 포함하고, 투자자에게 현실적 조언을 제시.
+  - 전체 문장은 반드시 **존댓말(합니다체)**로 작성하며, 반말이나 비격식체는 절대 사용하지 않습니다.
+  `.trim();
+  }
+  
+
+// --------------------------------------------------------------------
+// [7] Gemini AI 호출
+// --------------------------------------------------------------------
+function safeParseGemini(text) {
+  if (!text || typeof text !== "string") {
+    return { analysis: "AI 분석 실패", recommendation_summary: "관망 권고" };
+  }
+  const fence = text.match(/```[a-zA-Z]*\n?([\s\S]*?)```/);
+  const raw = (fence ? fence[1] : text).trim();
+
+  if (raw.startsWith("{") && raw.endsWith("}")) {
     try {
-        const [baseRate, m2, sale, rent, permit] = await Promise.all([
-            fetchIndicatorData("722Y001", "0101000"),
-            fetchIndicatorData("101Y004", "BBHA01"),
-            fetchIndicatorData("901Y062", "P63A"), // 주택매매가격지수 (전국)
-            fetchIndicatorData("901Y063", "P64A"), // 주택전세가격지수 (전국)
-            fetchIndicatorData("901Y037", ["I43AA", "1"]), // 건축허가면적 (전국, 건축 연면적)
-        ]);
+      return JSON.parse(raw);
+    } catch (_) {}
+  }
 
-        // 기간 필터링 및 YoY 변환
-        const sRate = sliceYears(baseRate, years);
-        const sM2YoY = sliceYears(calculateYoY(m2), years);
-        const sSaleYoY = sliceYears(calculateYoY(sale), years);
-        const sRentYoY = sliceYears(calculateYoY(rent), years);
-        const sPermitYoY = sliceYears(calculateYoY(permit), years);
-
-        // 최근 값 추출 (5단계 분류 및 AI 프롬프트에 사용)
-        const latestRate = sRate.length > 0 ? sRate[sRate.length - 1].value : 0;
-        const latestM2YoY = sM2YoY.length > 0 ? sM2YoY[sM2YoY.length - 1].value : 0;
-        const latestSaleYoY = sSaleYoY.length > 0 ? sSaleYoY[sSaleYoY.length - 1].value : 0;
-        const latestRentYoY = sRentYoY.length > 0 ? sRentYoY[sRentYoY.length - 1].value : 0;
-        const latestPermitYoY = sPermitYoY.length > 0 ? sPermitYoY[sPermitYoY.length - 1].value : 0;
-
-        // 🚀 5단계 위험 등급 분류 적용
-        const riskResult = classifyRealEstateRisk(
-            latestSaleYoY,
-            latestRentYoY,
-            latestPermitYoY,
-            latestRate,
-            latestM2YoY
-        );
-
-        // 🚀 AI 분석 프롬프트 생성
-        const aiPrompt = `
-            현재 ${years}년 기간 동안의 한국 부동산 핵심 지표 분석 결과는 다음과 같습니다:
-            - 부동산 위험 등급: ${riskResult.level}
-            - 기준금리: ${latestRate.toFixed(2)}%
-            - 주택매매가격지수 증가율 (YoY): ${latestSaleYoY.toFixed(2)}%
-            - 주택전세가격지수 증가율 (YoY): ${latestRentYoY.toFixed(2)}%
-            - 건축허가면적 증가율 (YoY): ${latestPermitYoY.toFixed(2)}%
-            - 광의 통화량 (M2) 증가율 (YoY): ${latestM2YoY.toFixed(2)}%
-
-            이 지표와 등급(${riskResult.level})을 종합적으로 분석하여, 현재 한국 부동산 시장 상황에 대한 **상세 해설**과 **가장 적합한 투자 전략(매수/관망/매도)을 한 문장으로 요약**해 주십시오. 
-            JSON의 'analysis' 필드 시작은 반드시 "현재 부동산 위험 등급: ${riskResult.level}..." 형식으로 시작해야 합니다.
-        `;
-
-        // 🚀 AI 분석 호출 (JSON 구조화된 객체 반환)
-        const aiAnalysis = await generateAIContent(aiPrompt);
-
-        // 💡 짧은 요약 문구 (하단 표시용)
-        const shortSummary = `최근 금리(${latestRate.toFixed(2)}%) 변동과 매매가격(${latestSaleYoY.toFixed(2)}%) 추이를 고려하여, 현재 시장 등급은 **${riskResult.level}**입니다. 투자 결정 전 심층 분석을 확인하세요.`;
-
-        // 🚀 결과 요약 메시지 구체화
-        let cycleMessage = `금리: ${latestRate.toFixed(2)}% | 매매 YoY: ${latestSaleYoY.toFixed(2)}% | 전세 YoY: ${latestRentYoY.toFixed(2)}% | M2 YoY: ${latestM2YoY.toFixed(2)}%`;
-
-        return {
-            date: today,
-            period: `${years}년 분석`,
-            cycleTitle: "한국 부동산 사이클 체커",
-            cycleMessage: cycleMessage,
-            // [수정] AI 분석 결과를 summary(상세 분석)와 recommendation(한 줄 요약)으로 분리 할당
-            risk: {
-                level: riskResult.level,
-                color: riskResult.color,
-                summary: aiAnalysis.analysis, // 상세 분석 (긴 문단)
-                recommendation: aiAnalysis.recommendation_summary, // 한 줄 투자 방향성 (defined 오류 해결)
-            },
-            // 💡 짧은 요약 필드 유지
-            shortSummary: shortSummary,
-
-            // 차트 데이터 (YoY 데이터 전달)
-            indicators: {
-                salePriceYoY: { latest: latestSaleYoY.toFixed(2), chartData: sSaleYoY },
-                rentPriceYoY: { latest: latestRentYoY.toFixed(2), chartData: sRentYoY },
-                interestRate: { latest: latestRate.toFixed(2), chartData: sRate },
-                m2YoY: { latest: latestM2YoY.toFixed(2), chartData: sM2YoY },
-                permitYoY: { latest: latestPermitYoY.toFixed(2), chartData: sPermitYoY }
-            }
-        };
-
-    } catch (err) {
-        console.error("부동산 데이터 분석 오류:", err.message);
-        return { error: "부동산 데이터 로드 및 분석 실패: " + err.message };
-    }
+  const a = raw.match(/"analysis"\s*:\s*"([\s\S]*?)"\s*(,|\})/);
+  const r = raw.match(/"recommendation_summary"\s*:\s*"([\s\S]*?)"\s*(,|\})/);
+  return {
+    analysis: a?.[1] || "AI 분석 실패",
+    recommendation_summary: r?.[1] || "관망 권고",
+  };
 }
 
+async function generateAIContent(prompt) {
+  if (!GEMINI_API_KEY) {
+    console.warn("⚠️ GEMINI_API_KEY 미설정 → 기본 분석 제공");
+    return {
+      analysis: "AI 키가 없어 기본 분석만 표시됩니다.",
+      recommendation_summary: "관망 권고",
+    };
+  }
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.7, responseMimeType: "text/plain" },
+  };
+
+  try {
+    const res = await axios.post(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 20000,
+    });
+
+    const text =
+      res?.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      res?.data?.candidates?.[0]?.content?.parts?.[0]?.inline_data?.data ||
+      "";
+    return safeParseGemini(text);
+  } catch (err) {
+    console.error("🚨 Gemini 호출 실패:", err.message);
+    return {
+      analysis: "AI 분석 실패 (응답 오류)",
+      recommendation_summary: "관망 권고",
+    };
+  }
+}
+
+// --------------------------------------------------------------------
+// [8] 메인 함수
+// --------------------------------------------------------------------
+async function getRealEstateSignal(period = "5y") {
+  const yearsMap = { "1y": 1, "3y": 3, "5y": 5 };
+  const years = yearsMap[period] || 5;
+  const yearsLabel = `${years}년`;
+
+  try {
+    const [baseRate, m2, sale, rent, permit] = await Promise.all([
+      fetchIndicatorData("722Y001", "0101000"), // 기준금리
+      fetchIndicatorData("101Y004", "BBHA01"),  // M2
+      fetchIndicatorData("901Y062", "P63A"),    // 매매
+      fetchIndicatorData("901Y063", "P64A"),    // 전세
+      fetchIndicatorData("901Y037", ["I43AA", "1"]), // 허가
+    ]);
+
+    const sRate = sliceYears(baseRate, years);
+    const sM2YoY = sliceYears(calculateYoY(m2), years);
+    const sSaleYoY = sliceYears(calculateYoY(sale), years);
+    const sRentYoY = sliceYears(calculateYoY(rent), years);
+    const sPermitYoY = sliceYears(calculateYoY(permit), years);
+
+    const avgRate = avgWeighted(sRate);
+    const avgM2YoY = avgWeighted(sM2YoY);
+    const avgSaleYoY = avgWeighted(sSaleYoY);
+    const avgRentYoY = avgWeighted(sRentYoY);
+    const avgPermitYoY = avgWeighted(sPermitYoY);
+
+    const risk = classifyRealEstateRisk(avgSaleYoY, avgRentYoY, avgPermitYoY, avgRate, avgM2YoY);
+    const prompt = buildAIPrompt({
+      yearsLabel,
+      riskLevel: risk.level,
+      riskDesc: risk.description,
+      rate: avgRate,
+      saleYoY: avgSaleYoY,
+      rentYoY: avgRentYoY,
+      permitYoY: avgPermitYoY,
+      m2YoY: avgM2YoY,
+    });
+    const ai = await generateAIContent(prompt);
+
+    const shortSummary = `금리 ${f2(avgRate)}%, 매매 ${f2(avgSaleYoY)}%, 전세 ${f2(avgRentYoY)}%, 허가 ${f2(avgPermitYoY)}%, M2 ${f2(avgM2YoY)}% → ${risk.level}`;
+
+    return {
+      date: today,
+      period: yearsLabel,
+      risk: {
+        level: risk.level,
+        color: risk.color,
+        description: risk.description,
+        summary: ai.analysis,
+        recommendation: ai.recommendation_summary,
+      },
+      shortSummary,
+      indicators: {
+        salePriceYoY: { latest: f2(avgSaleYoY), chartData: sSaleYoY },
+        rentPriceYoY: { latest: f2(avgRentYoY), chartData: sRentYoY },
+        interestRate: { latest: f2(avgRate), chartData: sRate },
+        m2YoY: { latest: f2(avgM2YoY), chartData: sM2YoY },
+        permitYoY: { latest: f2(avgPermitYoY), chartData: sPermitYoY },
+      },
+    };
+  } catch (err) {
+    console.error("🚨 부동산 분석 오류:", err.message);
+    return { error: err.message };
+  }
+}
+
+// --------------------------------------------------------------------
+// [9] 모듈 내보내기 (server.js 호환형)
+// --------------------------------------------------------------------
 module.exports = { getRealEstateSignal };
+
