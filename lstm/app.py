@@ -3,8 +3,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import os, shutil
+import os, shutil, re, certifi, requests
+from bs4 import BeautifulSoup
+import datetime as dt
 import yfinance as yf
+from pykrx import stock
 
 # 🚨 [수정된 부분]: VS Code 환경에서 .env 파일 로드를 위한 코드 추가
 # load_dotenv는 os.getenv가 .env 파일의 변수를 읽을 수 있도록 해줍니다.
@@ -32,11 +35,155 @@ except ImportError as e:
 st.set_page_config(page_title="LSTM 예측기", layout="wide")
 st.markdown("""
 <h1 style='text-align: center; color: #1E90FF; font-weight: bold;'>주식 이름으로 LSTM 예측</h1>
-<p style='text-align: center; color: #666;'>Volume 포함 다변량 LSTM + 30일 예측 + Gemini AI 리포트</p>
+<p style='text-align: center; color: #666;'>Volume 포함 다변량 LSTM + 30일 예측 + AI 리포트</p>
 """, unsafe_allow_html=True)
 
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True) # 모델 저장 디렉토리 생성
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def get_korean_fundamentals(code: str) -> dict:
+    # PER, PBR 항목을 포함하는 딕셔너리
+    # 🚨 PSR 제거
+    data = {"per": None, "pbr": None, "foreign_ownership": None, "dividend_yield": None, "market_cap": None}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9"
+    }
+    
+    # ────────────────────────────────
+    # 🚨 [버그 수정]: 시가총액 파싱 로직 개선
+    # - '595조 5,156억' (대형주) 와 '784억' (중소형주) 케이스를 모두 조 단위(float)로 정확히 변환
+    # ────────────────────────────────
+    def parse_money(text: str) -> float:
+        """
+        텍스트에서 금액을 조/억 단위로 파싱하여 '조 원' 단위 float으로 반환합니다.
+        (예: '595조 5,156억' -> 595.5156, '784억' -> 0.0784)
+        """
+        text = re.sub(r"[,\s]", "", text) # 쉼표와 공백 제거
+        val = 0.0
+
+        # 1. '조' 단위 파싱 (가장 먼저 처리)
+        trillion_match = re.search(r"([\d\.]+)조", text)
+        if trillion_match:
+            val += float(trillion_match.group(1))
+            # 파싱된 '조' 부분 제거. 남은 텍스트는 '억' 단위여야 함.
+            text = re.sub(r"[\d\.]*조", "", text) # 예: "595조5156억" -> "5156억"
+        
+        # 2. '억' 단위 파싱 (남은 텍스트에서, '억' 단위 표시가 없어도 숫자는 억으로 간주)
+        # 이 로직은 '784억' 케이스와 '5156억' 케이스를 모두 처리합니다.
+        billion_match = re.search(r"([\d\.]+)", text)
+        if billion_match:
+            billion_value = float(billion_match.group(1))
+            # 억을 조로 변환 (1조 = 10,000억)하여 val에 추가
+            val += billion_value / 10_000 
+            
+        return val
+
+
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        resp = requests.get(url, headers=headers, timeout=20, verify=certifi.where())
+        resp.raise_for_status()
+    except Exception as e:
+        st.warning(f"네이버 접속 실패: {e}")
+        return data
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # ────────────────────────────────
+    # 1. PER & PBR (Naver에서 직접 추출)
+    # ────────────────────────────────
+    per_tag = soup.find("em", id="_per")
+    if per_tag:
+        per_text = per_tag.get_text(strip=True).replace(",", "")
+        try:
+            data["per"] = round(float(per_text), 2)
+        except:
+            pass
+            
+    pbr_tag = soup.find("em", id="_pbr")
+    if pbr_tag:
+        pbr_text = pbr_tag.get_text(strip=True).replace(",", "")
+        try:
+            data["pbr"] = round(float(pbr_text), 2)
+        except:
+            pass
+
+    # ────────────────────────────────
+    # 2. 외국인 지분율
+    # ────────────────────────────────
+    for pattern in [
+        r"외국인[^\d]*([\d,]+\.\d+)%",
+        r"외국인\s*지분율[^\d]*([\d,]+\.\d+)%",
+        r"외국인\s*[\[\(][^%\d]*([\d,]+\.\d+)%[\]\)]"
+    ]:
+        m = re.search(pattern, soup.get_text())
+        if m:
+            data["foreign_ownership"] = float(m.group(1).replace(",", ""))
+            break
+
+    # ────────────────────────────────
+    # 3. 배당수익률
+    # ────────────────────────────────
+    div_text = soup.select_one("th:contains('배당수익률')")
+    if div_text:
+        row = div_text.find_parent("tr")
+        if row:
+            tds = row.find_all("td")
+            for td in tds:
+                txt = td.get_text(strip=True)
+                m = re.search(r"([\d,]+\.\d+)%", txt)
+                if m:
+                    data["dividend_yield"] = float(m.group(1).replace(",", ""))
+                    break
+
+    # fallback
+    if not data["dividend_yield"]:
+        for p in [
+            r"배당수익률[^\d]*([\d,]+\.\d+)%",
+            r"배당수익률\s*\[?\s*TTM\s*\]?\s*[^\d]*([\d,]+\.\d+)%",
+            r"배당수익률\s*[:\-]?\s*([\d,]+\.\d+)%"
+        ]:
+            m = re.search(p, soup.get_text())
+            if m:
+                data["dividend_yield"] = float(m.group(1).replace(",", ""))
+                break
+
+    # ────────────────────────────────
+    # 4. 시가총액 (PSR 계산 로직은 완전히 삭제됨)
+    # ────────────────────────────────
+    market_cap = None
+    # 🚨 annual_revenue = None # 연간 매출액 (조 원 단위) 제거
+
+    # 4.1 시가총액: <em id="_market_sum">
+    mcap_tag = soup.find("em", id="_market_sum")
+    mcap_text = ""
+    if mcap_tag:
+        mcap_text = mcap_tag.get_text(strip=True)
+        # 🚨 수정된 parse_money 함수 호출
+        market_cap = parse_money(mcap_text) # 조 원 단위
+
+    # data에 시가총액 저장 (조 원 단위, 소수점 2자리)
+    if market_cap is not None and market_cap > 0:
+        data["market_cap"] = round(market_cap, 2)
+    else:
+        if not mcap_tag:
+            st.warning(f"시가총액 조회 실패: Naver 페이지에서 '_market_sum' 태그를 찾을 수 없습니다. (코드: {code})")
+        elif mcap_tag and market_cap == 0.0:
+            st.warning(f"시가총액 조회 실패: 파싱 실패 또는 시가총액이 0입니다. (원문: '{mcap_text}', 코드: {code})")
+        else:
+            st.warning(f"시가총액 조회 실패: 기타 원인 (코드: {code})")
+            
+        # 🚨 시가총액이 없으면 해당 함수 종료
+        return data
+
+
+    # 🚨 4.2 연간 총 매출액 (재무정보 탭에서 가져오기) 로직 삭제
+    # 🚨 4.3 PSR 계산 로직 삭제
+    
+    return data
 
 # =========================================================================
 # 💡 Plotly 시각화 함수 (30일 예측 차트)
@@ -173,6 +320,7 @@ def submit():
         for k in ['df','symbol','model_trained','pred_df','final_price','interpretation']:
              st.session_state[k] = pd.DataFrame() if k in ['df','pred_df'] else False if k=='model_trained' else None
 
+
 # -------------------------------------------------------------------------
 # [UI] 2개의 컬럼으로 분할: 인기 종목 (1) | 검색 + 결과 (2)
 # -------------------------------------------------------------------------
@@ -181,7 +329,7 @@ col_top, col_main = st.columns([1, 2])
 
 # 1. 인기 검색 종목 순위표 (col_top)
 with col_top:
-    st.subheader("인기 종목 🚀 (실시간)")
+    st.subheader("실시간 인기 종목")
     st.caption("클릭하시면 종목이 검색됩니다.")
     
     for i, stock in enumerate(top_stocks):
@@ -229,14 +377,14 @@ if st.session_state.company_name and st.session_state.df.empty and HAS_MODEL_FIL
             if df.empty or len(df) < 60:
                 st.error("데이터 부족 또는 종목을 찾을 수 없습니다. 다른 종목을 검색해 주세요.")
                 st.session_state.company_name = ""
-                st.session_state.input_temp = ""
+                # 🚨 수정: st.session_state.input_temp = "" 제거
             else:
                 st.session_state.df = df
                 st.session_state.symbol = symbol
         except Exception as e:
             st.error(f"데이터 로딩 중 오류 발생: {e}")
             st.session_state.company_name = ""
-            st.session_state.input_temp = ""
+            # 🚨 수정: st.session_state.input_temp = "" 제거
 
 # UI (주가 추이 및 예측 결과 표시)
 if not st.session_state.df.empty:
@@ -248,24 +396,35 @@ if not st.session_state.df.empty:
 
     with col1:
         st.success(f"**{company}** ({symbol})")
-        
-        # Display DataFrame with Korean column names
-        disp_df = df.rename(columns={'Open':'시가', 'High':'고가', 'Low':'저가', 'Close':'종가', 'Volume':'거래량'})
-        st.markdown("#### 최근 5일 데이터")
-        # 🚨 background_gradient 오류 수정 및 use_container_width -> width='stretch' 변경
-        st.dataframe(
-            disp_df.tail(5)[['시가','고가','저가','종가','거래량']]
-            .style.format("{:,.0f}"), # .background_gradient(cmap='Blues', subset=['종가']) 제거
-            width='stretch'
-        )
+        disp = df.rename(columns={'Open':'시가','High':'고가','Low':'저가','Close':'종가','Volume':'거래량'})
+        st.markdown("#### 최근 10일")
+        st.dataframe(disp.tail(10)[['시가','고가','저가','종가','거래량']].style.format("{:,.0f}"), width='stretch')
 
-        time_steps = st.selectbox(
-            "과거 데이터 (Time Steps)", 
-            [30, 60, 90], 
-            index=1, 
-            key="ts_select", 
-            help="LSTM 모델이 학습에 사용할 과거 데이터 기간을 선택하세요."
-        )
+        # ── 재무지표 ──
+        st.markdown("#### 기업가치평가 지표")
+        try:
+            code = symbol.split(".")[0]
+            # 🚨 수정된 get_korean_fundamentals 함수 호출
+            fund = get_korean_fundamentals(code) 
+            def fmt(v, unit=""):
+                return f"{v:,.2f}{unit}" if v is not None else "—"
+
+            # 🚨 PBR, PSR 추가를 위해 컬럼 구조 변경 (PSR 제거 후 5개로 복원)
+            c1, c2 = st.columns(2)
+            c3, c4 = st.columns(2)
+            c5, c_dummy = st.columns(2) # 🚨 PSR 제거로 인한 컬럼 재조정 (c5, 빈 컬럼)
+
+            with c1: st.metric("PER (배)", fmt(fund.get("per")))
+            with c2: st.metric("PBR (배)", fmt(fund.get("pbr"))) 
+            with c3: st.metric("외국인 지분율 (%)", fmt(fund.get("foreign_ownership"), "%"))
+            with c4: st.metric("배당수익률 (%)", fmt(fund.get("dividend_yield"), "%"))
+            with c5: st.metric("시가총액 (조)", fmt(fund.get("market_cap"),"조"))
+            # 🚨 with c6: st.metric("PSR (배)", fmt(fund.get("psr"))) # PSR 지표 삭제
+
+        except Exception as e:
+            st.warning(f"재무 데이터 오류: {e}")
+        
+        time_steps = st.selectbox("Time Steps", [30, 60, 90], index=1)
         st.session_state.time_steps = time_steps
 
         # --- 모델 재학습 (기존 모델 삭제) ---
@@ -295,7 +454,7 @@ if not st.session_state.df.empty:
                         st.error(f"학습 오류: {e}")
                         
             # 2) 예측
-            with st.spinner("30일 예측 + Gemini AI 분석… (20~40초 소요)"):
+            with st.spinner("30일 예측 + AI 분석… (20~40초 소요)"):
                 try:
                     result = predict_next_month(df, symbol, time_steps, company)
                     
@@ -327,7 +486,7 @@ if not st.session_state.df.empty:
         st.line_chart(df['Close'], width='stretch') # 🚨 use_container_width -> width='stretch' 변경
 
         # 예측 결과 표시
-        current_ts = st.session_state.get('ts_select') or 60
+        current_ts = st.session_state.get('time_steps') or 60
         if (st.session_state.model_trained and
             not st.session_state.pred_df.empty and
             st.session_state.model_symbol == symbol and
@@ -342,7 +501,7 @@ if not st.session_state.df.empty:
             change_pct = ((final_price - current_price) / current_price) * 100
 
             st.markdown("---")
-            st.subheader(f"✅ 30일 예측 결과 및 AI 분석")
+            st.subheader(f" 30일 예측 결과 및 AI 분석")
 
             # 메트릭 카드
             col_a, col_b = st.columns(2)
@@ -353,7 +512,7 @@ if not st.session_state.df.empty:
             visualize_prediction(df, pred_df, symbol)
             
             # LLM 해석 리포트
-            st.subheader("💡 Gemini AI 분석 리포트")
+            st.subheader("💡 AI 분석 리포트")
             st.info(interpretation)
 
 else:

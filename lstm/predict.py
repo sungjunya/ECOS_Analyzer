@@ -50,7 +50,7 @@ def _generate_mock_interpretation(company, final_predicted_price, change_pct):
     
     return (
         f"**[🚨 네트워크/API 오류로 인한 가상 분석 리포트]**\n\n"
-        f"현재 {company} 종목에 대한 Gemini AI 연결에 실패하였습니다. "
+        f"현재 {company} 종목에 대한 AI 연결에 실패하였습니다. "
         f"이는 API 권한 또는 할당량 문제로 보입니다. 이 리포트는 **API 연결이 복구된 후** "
         f"정상적으로 표시됩니다.\n\n"
         f"**LSTM 모델 단순 예측 결과:** 향후 30일간 {trend}가 예상됩니다. "
