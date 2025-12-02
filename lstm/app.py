@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,16 +20,22 @@ try:
 except ImportError:
     print("WARNING: python-dotenv 라이브러리가 설치되지 않았습니다. pip install python-dotenv 로 설치해 주세요.")
     
-# 💡 lstm_model.py, predict.py, data_loader.py 파일이 같은 폴더에 있어야 합니다.
+# 💡 lstm_model.py, predict.py, data_loader.py, news_scraper.py 파일이 같은 폴더에 있어야 합니다.
 try:
     # 모듈 임포트 시도
     from lstm_model import train_lstm_model
     from predict import predict_next_month
-    from data_loader import load_stock_data
+    
+    # 🚨 get_english_name 임포트 제거 🚨
+    from data_loader import load_stock_data, get_english_name
+    
+    # 🚨 뉴스 크롤러 함수 이름만 임포트합니다. 🚨
+    from news_scraper import scrape_investing_news_titles_selenium 
+    
     HAS_MODEL_FILES = True
 except ImportError as e:
-    st.warning(f"경고: 필요한 모듈(lstm_model, predict, data_loader) 중 일부를 찾을 수 없습니다. ({e})")
-    st.warning("모델 학습 및 예측 기능이 비활성화됩니다. 파일을 확인해 주세요.")
+    st.warning(f"경고: 필요한 모듈(lstm_model, predict, data_loader, news_scraper) 중 일부를 찾을 수 없습니다. ({e})")
+    st.warning("모델 학습 및 예측, 뉴스 기능이 비활성화됩니다. 파일을 확인해 주세요.")
     HAS_MODEL_FILES = False
 
 # ── 설정 ──
@@ -44,8 +51,7 @@ os.makedirs(MODEL_DIR, exist_ok=True) # 모델 저장 디렉토리 생성
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_korean_fundamentals(code: str) -> dict:
     # PER, PBR 항목을 포함하는 딕셔너리
-    # 🚨 PSR 제거
-    data = {"per": None, "pbr": None, "foreign_ownership": None, "dividend_yield": None, "market_cap": None}
+    data = {"per": None, "pbr": None, "psr":None, "foreign_ownership": None, "dividend_yield": None, "market_cap": None}
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -93,7 +99,7 @@ def get_korean_fundamentals(code: str) -> dict:
     soup = BeautifulSoup(resp.text, "lxml")
 
     # ────────────────────────────────
-    # 1. PER & PBR (Naver에서 직접 추출)
+    # 1. PER & PBR & PSR
     # ────────────────────────────────
     per_tag = soup.find("em", id="_per")
     if per_tag:
@@ -111,6 +117,13 @@ def get_korean_fundamentals(code: str) -> dict:
         except:
             pass
 
+    psr_tag = soup.find("em", id="_psr")
+    if psr_tag:
+        psr_text = psr_tag.get_text(strip=True).replace(",", "")
+        try:
+            data["psr"] = round(float(psr_text), 2)
+        except:
+            pass
     # ────────────────────────────────
     # 2. 외국인 지분율
     # ────────────────────────────────
@@ -179,7 +192,39 @@ def get_korean_fundamentals(code: str) -> dict:
         # 🚨 시가총액이 없으면 해당 함수 종료
         return data
 
+            # 연간 매출액 + PSR 계산 (2025년 기준 최신 네이버 구조 100% 대응)
+    try:
+        # 방법 1: "연간" 탭 안에 있는 매출액 테이블 찾기 (가장 정확)
+        annual_table = soup.find("table", summary="연간 실적")
+        if annual_table:
+            rows = annual_table.find_all("tr")
+            for row in rows:
+                th = row.find("th")
+                if th and "매출액" in th.get_text():
+                    tds = row.find_all("td")
+                    if len(tds) > 0:
+                        revenue_text = tds[0].get_text(strip=True)  # 첫 번째 연간 매출액
+                        revenue_in_trillion = parse_money(revenue_text)
+                        if revenue_in_trillion > 0 and data["market_cap"]:
+                            data["psr"] = round(data["market_cap"] / revenue_in_trillion, 2)
+                            break
 
+        # 방법 2: 만약 연간 테이블이 없으면 기존 방식 시도 (백업)
+        if not data["psr"]:
+            revenue_row = soup.find("th", string=re.compile("매출액"))
+            if revenue_row:
+                parent_tr = revenue_row.find_parent("tr")
+                if parent_tr:
+                    revenue_text = parent_tr.find_all("td")[0].get_text(strip=True)
+                    revenue_in_trillion = parse_money(revenue_text)
+                    if "억" in revenue_text:  # 억 단위면 조로 변환
+                        revenue_in_trillion = revenue_in_trillion / 10000
+                    if revenue_in_trillion > 0 and data["market_cap"]:
+                        data["psr"] = round(data["market_cap"] / revenue_in_trillion, 2)
+
+    except Exception as e:
+        # 디버깅용 (필요 없으면 지워도 됨)
+        pass
     # 🚨 4.2 연간 총 매출액 (재무정보 탭에서 가져오기) 로직 삭제
     # 🚨 4.3 PSR 계산 로직 삭제
     
@@ -245,6 +290,7 @@ def visualize_prediction(df_actual, df_prediction, symbol):
     )
     # 🚨 use_container_width=True -> width='stretch'로 변경
     st.plotly_chart(fig, width='stretch') # 반응형 설정
+
 
 # =========================================================================
 # 💡 인기 검색 종목 데이터 및 함수 (yfinance 기반)
@@ -390,130 +436,192 @@ if st.session_state.company_name and st.session_state.df.empty and HAS_MODEL_FIL
 if not st.session_state.df.empty:
     df = st.session_state.df
     symbol = st.session_state.symbol
-    company = st.session_state.company_name
+    company = st.session_state.company_name # company 변수가 여기서 정의됨!
 
-    col1, col2 = st.columns([1, 2])
+        # =========================================================================
+    # 완전히 새로 짠 레이아웃 (보기 좋고, 글자 크고, 그래프 큼!)
+    # =========================================================================
 
-    with col1:
-        st.success(f"**{company}** ({symbol})")
-        disp = df.rename(columns={'Open':'시가','High':'고가','Low':'저가','Close':'종가','Volume':'거래량'})
-        st.markdown("#### 최근 10일")
-        st.dataframe(disp.tail(10)[['시가','고가','저가','종가','거래량']].style.format("{:,.0f}"), width='stretch')
+    # 1. 종목명 크게 상단에 표시
+    st.markdown(f"# {company} ({symbol})")
+    
+    # 2. 3단 레이아웃: 왼쪽(지표), 오른쪽(차트)
+    left_col, right_col = st.columns([0.7,2.2])
 
-        # ── 재무지표 ──
-        st.markdown("#### 기업가치평가 지표")
+    with left_col:
+        st.markdown("<h3 style='color:#1E90FF; font-weight:bold;'>기업 가치 지표</h3>", unsafe_allow_html=True)
         try:
             code = symbol.split(".")[0]
-            # 🚨 수정된 get_korean_fundamentals 함수 호출
-            fund = get_korean_fundamentals(code) 
+            fund = get_korean_fundamentals(code)
             def fmt(v, unit=""):
                 return f"{v:,.2f}{unit}" if v is not None else "—"
 
-            # 🚨 PBR, PSR 추가를 위해 컬럼 구조 변경 (PSR 제거 후 5개로 복원)
+            # 큰 메트릭으로 보기 좋게!
             c1, c2 = st.columns(2)
             c3, c4 = st.columns(2)
-            c5, c_dummy = st.columns(2) # 🚨 PSR 제거로 인한 컬럼 재조정 (c5, 빈 컬럼)
+            c5, c6 = st.columns(2)
 
-            with c1: st.metric("PER (배)", fmt(fund.get("per")))
-            with c2: st.metric("PBR (배)", fmt(fund.get("pbr"))) 
-            with c3: st.metric("외국인 지분율 (%)", fmt(fund.get("foreign_ownership"), "%"))
-            with c4: st.metric("배당수익률 (%)", fmt(fund.get("dividend_yield"), "%"))
-            with c5: st.metric("시가총액 (조)", fmt(fund.get("market_cap"),"조"))
-            # 🚨 with c6: st.metric("PSR (배)", fmt(fund.get("psr"))) # PSR 지표 삭제
+            with c1: st.metric("PER", fmt(fund.get("per"), "배"))
+            with c2: st.metric("PBR", fmt(fund.get("pbr"), "배"))
+            with c3: st.metric("PSR", fmt(fund.get("psr"), "배"))
+            with c4: st.metric("외국인 비율", fmt(fund.get("foreign_ownership"), "%"))
+            with c5: st.metric("배당수익률", fmt(fund.get("dividend_yield"), "%"))
+            with c6: st.metric("시가총액", fmt(fund.get("market_cap"), "조"))
+
+        except: pass
+
+        st.markdown("<h3 style='color:#1E90FF; font-weight:bold; text-shadow: 1px 1px 3px rgba(0,0,0,0.2);'>애널리스트 컨센서스</h3>", unsafe_allow_html=True)
+
+        try:
+            info = yf.Ticker(f"{code}.KS").info
+
+            mean = info.get("targetMeanPrice")
+            high = info.get("targetHighPrice")
+            low = info.get("targetLowPrice")
+            analysts = info.get("numberOfAnalystOpinions")
+            rating = info.get("recommendationKey", "").upper()
+            rating_kr = {
+                "BUY": "매수", "STRONG_BUY": "강력매수", 
+                "HOLD": "중립", "SELL": "매도", "UNDERPERFORM": "매도"
+            }.get(rating, "데이터 없음")
+
+            # 색상 설정 (이모지 없이도 확 띄게!)
+            if rating_kr in ["매수", "강력매수"]:
+                color = "#00E676"   # 강한 초록
+                badge = "강력 매수 추천"
+            elif rating_kr == "매도":
+                color = "#FF3333"   # 강한 빨강
+                badge = "매도 의견 우세"
+            else:
+                color = "#FFB300"   # 진한 주황
+                badge = "중립 의견"
+
+            st.metric("평균 목표가", f"{mean:,.0f}원" if mean else "N/A")
+            st.metric("목표가 범위", f"{low:,.0f} ~ {high:,.0f}원" if high and low else "N/A")
+            st.metric("애널리스트 수", f"{analysts}개사" if analysts else "N/A")
+
+            # 완전 눈에 띄는 컨센서스 박스 (이모지 없이도 미쳤음!)
+            st.markdown(f"""
+            <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #0f0f0f, #1a1a1a); 
+                        border-radius: 16px; border: 3px solid {color}; box-shadow: 0 8px 20px rgba(0,0,0,0.5);'>
+                <h2 style='margin:0; color:{color}; font-size:2.2em; font-weight:900; text-shadow: 2px 2px 8px rgba(0,0,0,0.7);'>
+                    {rating_kr}
+                </h2>
+                <p style='margin:8px 0 0; color:#eee; font-size:1.1em; font-weight:bold;'>
+                    {badge} • {analysts or 0}개 증권사
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
         except Exception as e:
-            st.warning(f"재무 데이터 오류: {e}")
-        
-        time_steps = st.selectbox("Time Steps", [30, 60, 90], index=1)
+            st.info("애널리스트 컨센서스 로드 중...")
+
+    with left_col:
+        st.markdown("<h3 style='color:#1E90FF; font-weight:bold;'>딥러닝 예측 설정</h3>", unsafe_allow_html=True)
+        time_steps = st.selectbox("Time Steps", [30, 60, 90], index=1, key="ts_select")
         st.session_state.time_steps = time_steps
 
-        # --- 모델 재학습 (기존 모델 삭제) ---
-        if st.button("모델 재학습 (기존 삭제)", type="secondary", width='stretch'): # 🚨 use_container_width -> width='stretch'로 변경
+        if st.button("모델 재학습 (기존 삭제)", type="secondary", use_container_width=True):
             if os.path.exists(MODEL_DIR):
                 shutil.rmtree(MODEL_DIR)
-                os.makedirs(MODEL_DIR)
+                os.makedirs(MODEL_DIR, exist_ok=True)
             st.session_state.model_trained = False
-            st.success("기존 모델 삭제 → 아래 **예측 시작** 버튼으로 자동 재학습됩니다.")
+            st.success("기존 모델 삭제 완료")
             st.rerun()
 
-        # --- 학습 및 예측 버튼 (통합) ---
-        if HAS_MODEL_FILES and st.button("LSTM 학습 및 30일 예측 시작", type="primary", width='stretch'): # 🚨 use_container_width -> width='stretch'로 변경
-            
-            safe_symbol = symbol.replace(".", "_")
-            model_path = os.path.join(MODEL_DIR, f"model_{safe_symbol}_{time_steps}.keras")
-            scaler_path = os.path.join(MODEL_DIR, f"scaler_{safe_symbol}_{time_steps}.pkl")
+        if HAS_MODEL_FILES:
+            if st.button("LSTM 학습 및 30일 예측 시작", type="primary", use_container_width=True):
+                safe_symbol = symbol.replace(".", "_")
+                model_path = os.path.join(MODEL_DIR, f"model_{safe_symbol}_{time_steps}.keras")
+                scaler_path = os.path.join(MODEL_DIR, f"scaler_{safe_symbol}_{time_steps}.pkl")
 
-            # 1) 모델 없으면 자동 학습
-            if not (os.path.exists(model_path) and os.path.exists(scaler_path)):
-                 with st.spinner(f"'{company}' 최신 데이터로 모델 학습 중…"):
+                if not (os.path.exists(model_path) and os.path.exists(scaler_path)):
+                    with st.spinner("모델 학습 중..."):
+                        try:
+                            train_lstm_model(df, symbol, time_steps)
+                        except Exception as e:
+                            st.error(f"학습 실패: {e}")
+
+                with st.spinner("30일 예측 중..."):
                     try:
-                        train_lstm_model(df, symbol, time_steps)
-                        if not (os.path.exists(model_path) and os.path.exists(scaler_path)):
-                            st.error("모델 저장 실패. 재시도.")
+                        result = predict_next_month(df, symbol, time_steps, company)
+                        if result and len(result) == 3:
+                            pred_df, final_price, interpretation = result
+                            if pred_df is not None:
+                                st.session_state.pred_df = pred_df
+                                st.session_state.final_price = final_price
+                                st.session_state.interpretation = interpretation
+                                st.session_state.model_trained = True
+                                st.session_state.model_symbol = symbol
+                                st.session_state.model_time_steps = time_steps
+                                st.success("예측 완료!")
+                                st.rerun()
                     except Exception as e:
-                        st.error(f"학습 오류: {e}")
-                        
-            # 2) 예측
-            with st.spinner("30일 예측 + AI 분석… (20~40초 소요)"):
-                try:
-                    result = predict_next_month(df, symbol, time_steps, company)
-                    
-                    if result and len(result) == 3:
-                        pred_df, final_price, interpretation = result
-                        if pred_df is not None and not pred_df.empty:
-                            st.session_state.pred_df = pred_df 
-                            st.session_state.final_price = final_price 
-                            st.session_state.interpretation = interpretation 
-                            st.session_state.model_trained = True
-                            st.session_state.model_symbol = symbol
-                            st.session_state.model_time_steps = time_steps
-                            st.success("예측 완료!")
-                        else:
-                             st.error(f"예측 실패: {interpretation}")
-                    else:
-                        st.error("예측 결과 오류. 재학습 후 재시도.")
-                        
-                except Exception as e:
-                    st.error(f"예측 실행 오류: {e}")
-                    st.session_state.model_trained = False
-            st.rerun() # UI 갱신
+                        st.error(f"예측 오류: {e}")
+        else:
+            st.error("모델 파일 없음")
 
-        elif not HAS_MODEL_FILES:
-            st.error("학습/예측 파일이 없어 버튼이 비활성화되었습니다.")
+    with right_col:
+        st.markdown("### 실시간 주가 추이")
+        st.line_chart(df['Close'], height=400, use_container_width=True)
 
-    with col2:
-        st.subheader(f"최근 주가 추이 ({symbol})")
-        st.line_chart(df['Close'], width='stretch') # 🚨 use_container_width -> width='stretch' 변경
-
-        # 예측 결과 표시
-        current_ts = st.session_state.get('time_steps') or 60
-        if (st.session_state.model_trained and
-            not st.session_state.pred_df.empty and
-            st.session_state.model_symbol == symbol and
-            st.session_state.model_time_steps == current_ts):
+        # 예측 결과 있으면 크게 표시
+        if (st.session_state.get('model_trained') and 
+            not st.session_state.get('pred_df', pd.DataFrame()).empty and
+            st.session_state.get('model_symbol') == symbol and
+            st.session_state.get('model_time_steps') == time_steps):
 
             pred_df = st.session_state.pred_df
             final_price = st.session_state.final_price
             interpretation = st.session_state.interpretation
-            
-            # 최종 변동률 계산
             current_price = df['Close'].iloc[-1]
             change_pct = ((final_price - current_price) / current_price) * 100
 
-            st.markdown("---")
-            st.subheader(f" 30일 예측 결과 및 AI 분석")
+            st.markdown("### 30일 후 예측 결과")
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("현재 가격", f"{current_price:,.0f}원")
+            with m2:
+                st.metric("30일 후 예측", f"{final_price:,.0f}원", f"{change_pct:+.2f}%")
 
-            # 메트릭 카드
-            col_a, col_b = st.columns(2)
-            col_a.metric("현재 가격", f"{current_price:,.0f}원")
-            col_b.metric("30일 후 예측 가격", f"{final_price:,.0f}원", f"{change_pct:+.1f}%")
-
-            # 30일 예측 차트 시각화
             visualize_prediction(df, pred_df, symbol)
-            
-            # LLM 해석 리포트
-            st.subheader("💡 AI 분석 리포트")
+
+            st.markdown("### AI 분석 리포트")
             st.info(interpretation)
 
-else:
-    st.info("왼쪽 '인기 종목'을 클릭하거나, 검색창에 주식 이름을 입력하세요.")
+
+    # =========================================================================
+    # 🚨 [수정된 위치] Investing.com 뉴스 제목 크롤링 및 표시 🚨
+    #    한국어 쿼리(company)를 그대로 전달합니다.
+    # =========================================================================
+    english_query_long = get_english_name(symbol) # 예: 'sk hynix'
+    english_query_short = english_query_long.split()[0] if english_query_long else '' # 예: 'sk'
+    # 2. 필터링 키워드 리스트 생성 (모든 경우의 수 포함)
+    search_keywords = [company.lower()] # 예: 'sk하이닉스' (한글)
+    if english_query_long and english_query_long not in search_keywords:
+        search_keywords.append(english_query_long)
+    if english_query_short and english_query_short not in search_keywords:
+        search_keywords.append(english_query_short)
+    
+    filter_query = ' '.join(search_keywords)
+    st.markdown("---") 
+    st.markdown("### 📰 Investing.com 주식 시장 뉴스 (크롤링)")
+    # 🚨 한국어 쿼리 그대로 사용 🚨
+    st.caption(f"검색 키워드: **{filter_query.upper()}**에 대한 주식 시장 뉴스") 
+
+    try:
+        # 🚨 company (한국어)를 그대로 query로 전달 🚨
+        news_results = scrape_investing_news_titles_selenium(filter_query, max_articles=10)
+        
+        if news_results:
+            st.markdown(f"총 {len(news_results)}개의 관련 뉴스가 크롤링되었습니다.")
+            
+            for item in news_results:
+                st.markdown(f"*{item['title']}* ([링크]({item['link']}))")
+        else:
+            st.info(f"'{company}' 키워드와 관련된 뉴스를 찾지 못했습니다. (Investing.com 크롤링)")
+
+    except Exception as e:
+        st.error(f"뉴스 크롤링 표시 중 오류 발생: {e}")
+        
+# 🚨 if not st.session_state.df.empty: 블록 끝
