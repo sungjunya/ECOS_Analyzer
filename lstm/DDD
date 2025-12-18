@@ -1,0 +1,90 @@
+# news_scraper.py 파일 전체를 이 코드로 대체하세요.
+
+import streamlit as st
+import time
+import re
+import requests
+import certifi
+from bs4 import BeautifulSoup
+
+@st.cache_data(ttl=600, show_spinner=False)
+def scrape_investing_news_titles_selenium(query: str, max_articles: int = 10) -> list:
+    """
+    Google News 검색을 통해 다중 키워드(query)와 관련된 뉴스를 가져옵니다.
+    함수 이름은 app.py와의 호환성을 위해 기존 이름 그대로 유지합니다.
+    (query는 '삼성전자 samsung electronics' 형태)
+    """
+    
+    # 🚨 Google News 검색 URL 구조 🚨
+    base_url = "https://news.google.com/search" 
+    search_text = query.replace(" ", "+") 
+
+    params = {
+        'q': search_text,
+        'hl': 'ko',      # Host Language (한국어)
+        'gl': 'KR',      # Geographic Location (대한민국)
+        'ceid': 'KR:ko'  # Content Enrollment ID
+    }
+
+    headers = {
+        # 크롤링 차단을 피하기 위해 흔히 사용되는 User-Agent 사용
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+    
+    news_list = []
+    
+    # 🚨 안정적인 크롤링을 위해 1초 대기 후 시작
+    time.sleep(1) 
+
+    try:
+        with st.spinner(f"[Google News] '{query.upper()}' 관련 뉴스를 검색 중... (선택자 강화 버전)"):
+            response = requests.get(base_url, headers=headers, params=params, 
+                                    timeout=15, verify=certifi.where())
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            
+            # --- 데이터 추출 로직 (선택자 강화) ---
+            # 1. Google News의 메인 기사 목록 항목을 선택: 
+            #    주로 <article> 태그 아래에 기사 정보가 담겨 있습니다.
+            article_items = soup.select('article')
+            
+            count = 0
+            for item in article_items:
+                if count >= max_articles:
+                    break
+                
+                # 2. article 태그 안에서 제목 역할을 하는 <a> 태그를 찾습니다.
+                #    제목은 일반적으로 h3 태그 안에 있거나, 큰 글꼴로 표시됩니다.
+                #    a 태그 중 href가 ./articles/로 시작하는 것을 찾습니다.
+                title_tag = item.select_one('a[href^="./articles/"]')
+                
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+                    relative_link = title_tag.get('href')
+                    
+                    if relative_link and title:
+                        # 상대 경로를 절대 경로로 변환 (https://news.google.com/articles/...)
+                        full_link = f"https://news.google.com{relative_link[1:]}"
+                        
+                        news_list.append({"title": title, "link": full_link})
+                        count += 1
+            
+        if not news_list:
+             # 재검증을 위해, 혹시 다른 구조로 뉴스 링크가 있는지 확인하는 백업 로직 추가
+            backup_links = soup.select('a[href^="./articles/"]')
+            if backup_links:
+                # 파싱 로직은 실패했지만 링크 자체는 있는 경우 (최대 3개만 표시)
+                 return [{"title": f"경고: 뉴스 파싱은 실패했으나, {len(backup_links)}개의 링크가 감지되었습니다. 코드의 선택자를 다시 확인하세요.", "link": "#"}]
+            
+            # 최종적으로 뉴스 리스트가 빈 경우
+            return [{"title": f"Google News 검색 결과: '{query}'와 일치하는 기사가 없습니다. (HTML 구조 문제 또는 차단 가능성)", "link": "#"}]
+            
+        return news_list
+
+    except requests.exceptions.RequestException as e:
+        print(f"Google News 크롤링 실패 (Request 오류): {type(e).__name__}, {e}")
+        return [{"title": f"Google News 크롤링 실패 (네트워크 또는 서버 오류)", "link": "#"}]
+    except Exception as e:
+        print(f"뉴스 크롤링 (Google News) 실패: {type(e).__name__}, {e}")
+        return [{"title": f"뉴스 크롤링 실패 (기타 오류)", "link": "#"}]

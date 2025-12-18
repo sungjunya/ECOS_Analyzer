@@ -155,7 +155,7 @@ def load_stock_data(input_text):
     code = symbol.replace('.KS', '')
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
     all_data = []
-    max_pages = 30
+    max_pages = 150
 
     with st.spinner(f"[{symbol}] 데이터 수집 중..."):
         session = requests.Session()

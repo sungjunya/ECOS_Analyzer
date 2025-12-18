@@ -1,4 +1,4 @@
-# lstm_model.py
+# lstm_model.py (수정된 최종 코드)
 import streamlit as st
 import numpy as np
 import pandas as pd 
@@ -10,20 +10,17 @@ import joblib
 import os
 import tensorflow as tf 
 import numpy as np 
+from sklearn.metrics import mean_squared_error 
+from joblib import dump, load # joblib.load, joblib.dump 대신 명시적으로 임포트
 
-# ── 설정: 모델 저장 폴더 ──
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 @st.cache_resource
-def _get_model_and_scaler(df, symbol, time_steps=60):
-    """실제 LSTM 모델을 학습하고 저장하는 내부 함수"""
-    
+def _train_and_evaluate_model(df, symbol, time_steps=60): 
     df = df.copy()
     
-    # 1. 기술적 지표 추가 (총 13개 피처)
-    
-    # [기존 7개 피처 파생]
+    # ... (기술적 지표 생성 로직: 변동 없음)
     df['SMA_5'] = df['Close'].rolling(5).mean()
     df['SMA_20'] = df['Close'].rolling(20).mean()
     delta = df['Close'].diff()
@@ -36,66 +33,72 @@ def _get_model_and_scaler(df, symbol, time_steps=60):
     df['MACD'] = ema12 - ema26
     df['Volume_SMA'] = df['Volume'].rolling(20).mean()
     
-    # 🚨 신규 6개 피처 추가 시작 (BB, OBV, Stochastic, ROC) 🚨
-    
-    # 1. 볼린저 밴드 (BB)
     df['BB_Std'] = df['Close'].rolling(window=20).std()
     df['BB_Upper'] = df['SMA_20'] + (df['BB_Std'] * 2)
     df['BB_Lower'] = df['SMA_20'] - (df['BB_Std'] * 2)
     
-    # 2. OBV (On-Balance Volume)
     df['OBV'] = (df['Close'].diff().apply(np.sign) * df['Volume']).fillna(0).cumsum()
     
-    # 3. 스토캐스틱 오실레이터 (Stochastic Oscillator)
     high_14 = df['High'].rolling(window=14).max()
     low_14 = df['Low'].rolling(window=14).min()
     df['Stoch_K'] = 100 * ((df['Close'] - low_14) / (high_14 - low_14).replace(0, 1e-6))
     df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
     
-    # 4. ROC (Rate of Change)
     df['ROC'] = (df['Close'] - df['Close'].shift(9)) / df['Close'].shift(9) * 100
     
-    # 2. NaN 값 제거 (지표 생성으로 인한 초기 NaN)
     df = df.dropna()
     
-    # 3. 사용할 피처 정의 (총 13개)
-    # PSR은 재무 지표이므로, LSTM 시퀀스에는 기술 지표만 사용하고, LLM 해석에만 사용합니다.
     features = ['Close', 'Volume', 'SMA_5', 'SMA_20', 'RSI', 'MACD', 'Volume_SMA', 
                 'BB_Upper', 'BB_Lower', 'OBV', 'Stoch_K', 'Stoch_D', 'ROC']
     data = df[features].values
     
-    # 데이터 부족 재검사
     if len(data) < time_steps:
         st.error(f"지표 생성 후 데이터 부족! {len(data)}일 < {time_steps}일")
-        return None, None
+        return None, None, None, None, None, None 
 
-    # 4. 스케일링
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(data)
+    
+    dates_for_sequences = df.index[time_steps:] 
 
-    # 5. 시퀀스 데이터 생성
     X, y = [], []
     for i in range(time_steps, len(scaled)):
         X.append(scaled[i-time_steps:i])
         y.append(scaled[i, 0]) 
     X, y = np.array(X), np.array(y)
 
-    # 6. LSTM 모델 정의 (다변량 features 개수 13개 반영)
-    model = Sequential([
-        Input(shape=(time_steps, len(features))), 
-        LSTM(100, return_sequences=True), 
-        LSTM(100),
-        Dense(50),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
+    train_size = int(len(X) * 0.8)
+    X_train, X_test = X[:train_size], X[train_size:]
+    y_train, y_test = y[:train_size], y[train_size:]
     
-    # 7. 모델 학습 
-    with st.spinner("LSTM 다변량 모델 학습 중..."):
-        model.fit(X, y, epochs=30, batch_size=32, verbose=0,
-                  callbacks=[EarlyStopping(patience=7, restore_best_weights=True, monitor='loss')]) 
+    test_dates = dates_for_sequences[train_size:]
+    
+    model = Sequential([
+        Input(shape=(time_steps, len(features))), # Input Layer
+        LSTM(100, return_sequences=True), # The Feature Extractor
+        LSTM(100), # The Pattern Analyzer
+        Dense(50), 
+        Dense(1) # Output Layer
+    ])
+    model.compile(optimizer='adam', loss='mse') #Adaptive Moment Estimation
+    
+    with st.spinner("LSTM 다변량 모델 학습"):
+        model.fit(X_train, y_train, epochs=30, batch_size=32, verbose=0,
+                # EarlyStopping으로 7번 학습 시에도 Loss값 개선되지 않을 시 과적합으로 판단 (방지용)
+                callbacks=[EarlyStopping(patience=7, restore_best_weights=True, monitor='loss')]) 
 
-    # 8. 모델 및 스케일러 저장
+    scaled_test_y_pred = model.predict(X_test)
+    
+    # ----------------------------------------------------------------------------------
+    # 🚨 [핵심 수정 부분] RMSE/MAE 계산을 위해 정규화된 값(y_test, scaled_test_y_pred)을 반환
+    # ----------------------------------------------------------------------------------
+    
+    # 1. 지표 계산용: 정규화된 값 그대로 사용 (app.py의 calculate_metrics 함수에서 사용할 값)
+    # y_test는 이미 정규화된 상태입니다. scaled_test_y_pred도 마찬가지입니다.
+    test_y_true_scaled = y_test
+    test_y_pred_scaled = scaled_test_y_pred.flatten() 
+
+    # 2. 모델 및 스케일러 저장 (변동 없음)
     safe_symbol = symbol.replace(".", "_")
     scaler_path = os.path.join(MODEL_DIR, f"scaler_{safe_symbol}_{time_steps}.pkl")
     model_path = os.path.join(MODEL_DIR, f"model_{safe_symbol}_{time_steps}.keras")
@@ -105,15 +108,22 @@ def _get_model_and_scaler(df, symbol, time_steps=60):
     
     st.success(f"다변량 모델 저장 완료: `{model_path}`")
     
-    # BB_Std 컬럼을 제거하고 processed_df로 반환
-    return scaler, model, df.drop(columns=['BB_Std'])
+    # 3. 반환 값 변경: test_y_true, test_y_pred를 scaled 값으로 변경
+    return scaler, model, df.drop(columns=['BB_Std']), test_y_true_scaled, test_y_pred_scaled, test_dates 
 
 def train_lstm_model(df, symbol, time_steps=60):
-    """Streamlit 세션 상태를 관리하는 외부 함수"""
-    scaler, model, processed_df = _get_model_and_scaler(df, symbol, time_steps)
+    # 🚨 _train_and_evaluate_model에서 scaled 값을 반환받음
+    scaler, model, processed_df, test_y_true_scaled, test_y_pred_scaled, test_dates = _train_and_evaluate_model(df, symbol, time_steps)
     
     if model:
         st.session_state.model_trained = True
         st.session_state.model_symbol = symbol
         st.session_state.model_time_steps = time_steps
         st.session_state.processed_df = processed_df
+        
+        st.session_state.test_dates = test_dates
+        
+        # 🚨 app.py로 scaled 값을 전달하여, app.py에서 scaled 지표가 계산되도록 함
+        return test_y_true_scaled, test_y_pred_scaled
+    else:
+        return np.array([]), np.array([])

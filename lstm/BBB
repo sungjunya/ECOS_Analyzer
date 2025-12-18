@@ -1,0 +1,68 @@
+# 🚨 [필수] 뉴스 크롤링을 위한 키워드 생성 (filter_query 정의) 🚨
+    
+    # data_loader.py의 get_english_name 함수 사용
+    english_query_long = get_english_name(symbol) # 예: 'samsung electronics'
+    english_query_short = english_query_long.split()[0] if english_query_long else '' # 예: 'samsung'
+
+    # 2. 필터링 키워드 리스트 생성 (모든 경우의 수 포함)
+    search_keywords = [company.lower()] # 예: '삼성전자' (한글)
+    if english_query_long and english_query_long not in search_keywords:
+        search_keywords.append(english_query_long)
+    if english_query_short and english_query_short not in search_keywords:
+        search_keywords.append(english_query_short)
+
+    # filter_query 변수 정의 (NameError를 해결)
+    filter_query = ' '.join(search_keywords) 
+
+    # ── 네이버 금융 뉴스 감성 분석 ──
+    st.markdown("---") 
+    st.markdown("### 📰 Google News (구글 뉴스) 주식 뉴스 감성 분석") # 🚨 제목 수정
+    # filter_query 변수를 여기서 사용
+    st.caption(f"검색 키워드: **{filter_query.upper()}**에 대한 최신 {10}개 뉴스 분석") 
+
+    if HAS_HUGGINGFACE:
+        try:
+            # news_scraper.py에서 Google News를 크롤링하도록 수정한 함수 호출
+            news_results = scrape_investing_news_titles_selenium(filter_query, max_articles=10) 
+            
+            if news_results:
+                is_error_message = (news_results[0]['link'] == '#' and 
+                                    ("실패" in news_results[0]['title'] or "없습니다" in news_results[0]['title']))
+                
+                if is_error_message:
+                    st.error(news_results[0]['title'])
+                else:
+                    st.markdown(f"총 {len(news_results)}개의 관련 뉴스를 분석했습니다.")
+                    
+                    for item in news_results:
+                        title = item['title']
+                        link = item['link']
+                        
+                        # 감성 분석 수행
+                        sentiment, confidence, color = get_sentiment(title, tokenizer, model, device, label_map)
+
+                        confidence_pct = f"{confidence * 100:.2f}%"
+                        
+                        st.markdown(f"""
+                        <div style='padding: 8px 12px; margin-bottom: 8px; border-radius: 6px; 
+                                    border-left: 5px solid {color}; background-color: #1E1E1E;'>
+                            <span style='font-size: 0.9em; font-weight: bold; color: {color}; margin-right: 10px;'>
+                                [{sentiment}] ({confidence_pct})
+                            </span>
+                            <a href='{link}' target='_blank' style='text-decoration: none; color: #DDDDDD;'>
+                                {title}
+                            </a>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            else:
+                st.info(f"'{company}'에 대한 최신 뉴스 기사를 찾지 못했습니다.")
+
+        except NameError as e:
+            st.error(f"감성 분석 모델 로드 오류: {e}. 'load_sentiment_model', 'get_sentiment' 함수 정의를 확인하세요.")
+
+        except Exception as e:
+            st.error(f"뉴스 감성 분석 처리 중 오류 발생: {e}")
+
+    else:
+        st.error("Hugging Face (transformers, torch) 라이브러리가 설치되어야 이 기능을 사용할 수 있습니다.")

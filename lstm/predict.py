@@ -14,7 +14,7 @@ import numpy as np # np.sign 사용
 
 # ── 설정 ──
 MODEL_DIR = "models" 
-API_MODEL_NAME = "gemini-2.5-flash-preview-09-2025" 
+API_MODEL_NAME = "gemini-1.5-flash" 
 
 def add_technical_indicators(df):
     """
@@ -124,7 +124,7 @@ def _generate_interpretation(company, current_price, final_predicted_price, chan
     payload = {
         "contents": [{"parts": [{"text": user_query}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "tools": [{"google_search": {}}], 
+        #"tools": [{"google_search": {}}], 
     }
     
     # API 호출 (지수 백오프 적용)

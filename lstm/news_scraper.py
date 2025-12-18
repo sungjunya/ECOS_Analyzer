@@ -9,6 +9,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import re
 import numpy as np 
+# 🚨 [추가] URL 인코딩을 위해 urllib.parse 임포트
+from urllib.parse import quote 
 
 # ⚠️ 크롤링 주의 사항: Selenium은 requests보다 느리지만, 403 에러 회피에 필수적입니다.
 #    비상업적 학습 목적으로만 사용하고, 충분한 time.sleep을 유지해야 합니다.
@@ -16,18 +18,19 @@ import numpy as np
 @st.cache_data(ttl=600, show_spinner=False)
 def scrape_investing_news_titles_selenium(query: str, max_articles: int = 10) -> list:
     """
-    한국 Investing.com 주식 시장 뉴스 URL에서 크롤링한 후, 
-    다중 키워드(query)를 이용해 필터링합니다. (query는 'sk하이닉스 sk hynix sk' 형태)
+    한국 Investing.com의 종목 검색 뉴스 결과 페이지에서 크롤링합니다.
+    (예: https://kr.investing.com/search/?q=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&tab=news)
     """
     
-    # 한국 Investing.com의 주식 시장 뉴스 URL 고정
-    base_url = "https://kr.investing.com/news/stock-market-news" 
+    # 🚨 [수정] 검색 결과 페이지 URL 사용
+    encoded_query = quote(query) # 한국어 쿼리 인코딩
+    base_url = f"https://kr.investing.com/search/?q={encoded_query}&tab=news" 
     target_url = base_url
 
     news_list = []
     
-    # 🚨 전달받은 다중 키워드를 분리 (예: ['sk하이닉스', 'sk', 'hynix'])
-    search_keywords = query.lower().split() 
+    # 🚨 [삭제] 검색 결과 페이지에서는 별도의 키워드 필터링은 하지 않습니다.
+    #    (검색 결과 자체가 이미 필터링된 것이므로)
     
     # --- Selenium 설정 ---
     options = Options()
@@ -41,31 +44,25 @@ def scrape_investing_news_titles_selenium(query: str, max_articles: int = 10) ->
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
         
-        # 쿼리를 한국어 그대로 사용
-        with st.spinner(f"[{query.upper()}] 뉴스 페이지를 브라우저로 로딩 중 (5초 대기)..."):
+        with st.spinner(f"[{query.upper()}] 뉴스 검색 페이지를 브라우저로 로딩 중 (5초 대기)..."):
             driver.get(target_url) 
-            # 403 에러 회피를 위해 충분히 기다립니다.
+            # 페이지 로딩 및 동적 콘텐츠 생성을 위해 충분히 기다립니다.
             time.sleep(5) 
             soup = BeautifulSoup(driver.page_source, "html.parser")
         
-        # --- 데이터 추출 및 다중 필터링 로직 ---
-        # 제목 링크를 포함하는 요소들을 선택
-        news_containers = soup.select('article a[title]')
+        # --- 데이터 추출 로직 ---
+        # 🚨 [수정] 검색 결과 페이지의 뉴스 제목/링크 CSS Selector
+        # Investing.com 검색 결과 뉴스 탭의 링크 컨테이너
+        news_containers = soup.select('div.search-result-items article a')
         
         for container in news_containers:
-            title = container.get('title', '').strip()
+            # 제목은 a 태그의 텍스트
+            title = container.get_text(strip=True)
             link = container.get('href')
             
-            title_lower = title.lower()
+            # 검색 결과 페이지이므로 별도 키워드 필터링 로직은 삭제 (성능 개선)
             
-            # 🚨 [수정] 다중 필터링 로직 🚨
-            is_relevant = False
-            for keyword in search_keywords:
-                if keyword in title_lower:
-                    is_relevant = True
-                    break
-
-            if link and title and is_relevant:
+            if link and title:
                 # kr.investing.com 도메인을 사용하여 링크 구성
                 full_link = f"https://kr.investing.com{link}" if link.startswith('/') else link
                 news_list.append({"title": title, "link": full_link})
